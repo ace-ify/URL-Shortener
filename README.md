@@ -8,13 +8,13 @@ The following diagram illustrates how the services communicate within the Docker
 
 ```mermaid
 graph TD
-    Client["Client / Browser"] -->|HTTP Request| API["FastAPI Application (Port 8003)"]
-    API -->|1. Check Rate Limit & Cache| Redis["Redis Caching (Port 6381)"]
-    API -->|2. Persistent Query (If Cache Miss)| DB["PostgreSQL Database (Port 5433)"]
+    Client["Client / Browser"] -->|HTTP Request| API["FastAPI Application"]
+    API -->|1. Check Rate Limit & Cache| Redis["Redis Caching"]
+    API -->|2. Query DB on cache miss| DBNode["PostgreSQL Database"]
     
     style API fill:#f9f,stroke:#333,stroke-width:2px
     style Redis fill:#ff9,stroke:#333,stroke-width:2px
-    style DB fill:#9f9,stroke:#333,stroke-width:2px
+    style DBNode fill:#9f9,stroke:#333,stroke-width:2px
 ```
 
 ---
