@@ -6,3 +6,4 @@ venv/
 *.db
 .idea/
 .vscode/
+.pytest_cache/
