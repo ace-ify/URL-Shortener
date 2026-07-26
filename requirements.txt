@@ -8,5 +8,4 @@ redis
 alembic
 PyJWT
 passlib[bcrypt]
-bcrypt
-
+bcrypt<5

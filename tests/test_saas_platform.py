@@ -37,6 +37,9 @@ def test_user_signup_and_login():
     weak_res = client.post("/auth/signup", json={"username": "user1", "password": "123"})
     assert weak_res.status_code == 422  # Validation error
 
+    long_res = client.post("/auth/signup", json={"username": "longuser", "password": "A1!" + "a" * 70})
+    assert long_res.status_code == 422
+
     # Valid signup
     signup_res = client.post("/auth/signup", json={"username": "user1", "password": "Password123!"})
     assert signup_res.status_code == 201

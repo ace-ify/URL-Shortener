@@ -19,14 +19,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login",auto_error=False)
 
 def hash_password(password: str) -> str:
-    # Bcrypt spec limits input passwords to 72 bytes max
-    password_bytes = password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
-    return pwd_context.hash(password_bytes)
+    return pwd_context.hash(password)
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    # Bcrypt spec limits input passwords to 72 bytes max
-    password_bytes = password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
-    return pwd_context.verify(password_bytes, hashed_password)
+    return pwd_context.verify(password, hashed_password)
 
 
 # JWT helper funcs
