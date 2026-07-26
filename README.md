@@ -64,6 +64,7 @@ graph TD
 | `POST` | `/auth/login` | None | Authenticate and obtain JWT Access Token |
 | `POST` | `/auth/keys` | JWT | Generate a new Developer API Key (`sk_live_...`) |
 | `GET` | `/auth/keys` | JWT | List developer API keys and their assigned rate limits |
+| `GET` | `/health` | None | Verifies database and Redis connectivity |
 | `POST` | `/shorten` | `X-API-Key` | Programmatic URL shortening with Per-Key Rate Limiting |
 | `GET` | `/urls` | JWT | Paginated, filtered, and sorted URL dashboard list (RBAC) |
 | `PATCH`| `/urls/{short_code}` | JWT | Update destination URL with strict ownership check |
@@ -118,5 +119,7 @@ venv\Scripts\python -m pytest
 
 Output:
 ```text
-============================== 3 passed in 7.88s ==============================
+============================== 6 passed ==============================
 ```
+
+GitHub Actions runs this suite on every push and pull request. `POST /shorten` is intentionally the developer API surface: dashboard users use JWT to create API keys, then use those keys to shorten programmatically.

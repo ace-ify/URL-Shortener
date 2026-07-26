@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, status, Depends, Request, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, HttpUrl, field_validator
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -144,6 +145,20 @@ def generate_collision_safe_short_code(db: Session, max_retries: int = 5) -> str
     )
 
 # --- 4. AUTH & DEVELOPER API ROUTES ---
+
+@app.get("/health")
+def health_check(db: Session = Depends(get_db)):
+    """Verify dependencies required by the API are reachable."""
+    try:
+        db.execute(text("SELECT 1"))
+        from app.cache import r
+        r.ping()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service dependency unavailable",
+        )
+    return {"status": "ok"}
 
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: UserSignupRequest, db: Session = Depends(get_db)):
