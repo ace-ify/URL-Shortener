@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -67,6 +68,22 @@ def test_api_key_lifecycle():
     assert shorten_res.status_code == 201
     assert "short_code" in shorten_res.json()
 
+def test_ssrf_url_is_rejected():
+    client.post("/auth/signup", json={"username": "ssrfuser", "password": "Password123!"})
+    token = client.post("/auth/login", json={"username": "ssrfuser", "password": "Password123!"}).json()["access_token"]
+    key = client.post("/auth/keys", json={}, headers={"Authorization": f"Bearer {token}"}).json()["plain_key"]
+
+    response = client.post("/shorten", json={"url": "http://127.0.0.1/admin"}, headers={"X-API-Key": key})
+    assert response.status_code == 422
+    assert "forbidden" in response.json()["error"]["details"][0]["msg"].lower()
+
+def test_short_code_generation_retries_after_collision():
+    with patch("app.main.generate_base62_code", side_effect=["taken1", "fresh2"]), \
+         patch("app.main.crud.get_url_by_code", side_effect=[object(), None]) as get_by_code:
+        from app.main import generate_collision_safe_short_code
+        assert generate_collision_safe_short_code(object()) == "fresh2"
+    assert get_by_code.call_count == 2
+
 # 3. OWNERSHIP ENFORCEMENT & SOFT DELETE TESTS
 def test_ownership_and_soft_delete():
     # Setup User A and User B
@@ -81,9 +98,16 @@ def test_ownership_and_soft_delete():
     short_res = client.post("/shorten", json={"url": "https://google.com"}, headers={"X-API-Key": key_a})
     short_code = short_res.json()["short_code"]
 
-    # User B tries to delete User A's URL -> Forbidden (403/404)
+    # User B cannot change or delete User A's URL.
+    update_res = client.patch(
+        f"/urls/{short_code}",
+        json={"new_original_url": "https://example.com/changed"},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert update_res.status_code == 403
+
     del_res = client.delete(f"/urls/{short_code}", headers={"Authorization": f"Bearer {token_b}"})
-    assert del_res.status_code in [403, 404]
+    assert del_res.status_code == 403
 
     # User A deletes their own URL -> Soft Delete Success (200)
     del_own = client.delete(f"/urls/{short_code}", headers={"Authorization": f"Bearer {token_a}"})
@@ -92,3 +116,8 @@ def test_ownership_and_soft_delete():
     # Public redirect to soft-deleted URL should return 404
     redir = client.get(f"/{short_code}")
     assert redir.status_code == 404
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
