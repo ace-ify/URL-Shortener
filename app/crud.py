@@ -13,8 +13,52 @@ def create_user(db: Session, username: str, password_raw: str, role: str = "user
     db.refresh(db_user)
     return db_user
 
-def get_user_by_username(db:Session,username:str)->UserModel:
-    return db.query(UserModel).filter(UserModel.username==username).first()
+def get_user_by_username(db: Session, username: str) -> UserModel:
+    return db.query(UserModel).filter(UserModel.username == username).first()
+
+def get_user_by_google_sub(db: Session, google_sub: str) -> UserModel:
+    return db.query(UserModel).filter(UserModel.google_sub == google_sub).first()
+
+def get_user_by_email(db: Session, email: str) -> UserModel:
+    return db.query(UserModel).filter(UserModel.email == email).first()
+
+def create_or_link_oauth_user(db: Session, email: str, google_sub: str) -> UserModel:
+    """
+    Account Linking Strategy:
+    1. Match by google_sub (existing OAuth user)
+    2. Match by email (link existing local password user to Google OAuth)
+    3. Create new user if no match found
+    """
+    user = get_user_by_google_sub(db, google_sub)
+    if user:
+        return user
+
+    user_by_email = get_user_by_email(db, email)
+    if user_by_email:
+        user_by_email.google_sub = google_sub
+        db.commit()
+        db.refresh(user_by_email)
+        return user_by_email
+
+    username_base = email.split("@")[0]
+    username = username_base
+    counter = 1
+    while get_user_by_username(db, username):
+        username = f"{username_base}_{counter}"
+        counter += 1
+
+    new_user = UserModel(
+        username=username,
+        email=email,
+        google_sub=google_sub,
+        password_hash=None,
+        role="user"
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
 
 # --- API KEY OPERATIONS ---
 def create_api_key_for_user(db: Session, user_id: int, label: str = "Default Key", rate_limit: int = 10) -> tuple[APIKeyModel, str]:

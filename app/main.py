@@ -2,7 +2,7 @@ import secrets
 import string
 from fastapi.encoders import jsonable_encoder
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, status, Depends, Request, Query
+from fastapi import FastAPI, HTTPException, status, Depends, Request, Query, APIRouter
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, HttpUrl, field_validator
@@ -15,16 +15,26 @@ from app.cache import get_cached_url, set_cached_url
 from app.rate_limiter import limit_ip_rate, limit_api_key_rate
 from app.auth import (
     hash_password, verify_password, create_access_token, 
-    get_current_user, get_api_key_owner
+    get_current_user, get_api_key_owner,
+    generate_oauth_state, verify_and_consume_oauth_state, fetch_google_user_profile
 )
 from app.models import UserModel, APIKeyModel
-from app.queue import push_click_event
+
+from app.middleware import LoggingAndRedactionMiddleware, V1DeprecationMiddleware
 
 app = FastAPI(
     title="SaaS-Grade URL Shortener Platform",
     description="Multi-tenant shortener with Dual Auth (JWT & API Keys), Redis Caching, Base62 Collision Protection & Async Click Queue",
     version="2.0.0"
 )
+
+app.add_middleware(LoggingAndRedactionMiddleware)
+app.add_middleware(V1DeprecationMiddleware)
+
+v1_router = APIRouter(prefix="/v1")
+v2_router = APIRouter(prefix="/v2")
+
+
 
 # --- 1. CENTRALIZED EXCEPTION HANDLERS (Standard JSON Error Shape) ---
 
@@ -117,6 +127,17 @@ class URLShortenResponse(BaseModel):
     clicks: int
     created_at: str
 
+class URLShortenV2Data(BaseModel):
+    short_code: str
+    short_url: str
+    target_url: str
+    clicks: int
+    created_at: str
+
+class URLShortenV2Response(BaseModel):
+    data: URLShortenV2Data
+    api_version: str = "v2"
+
 class URLUpdateDestinationRequest(BaseModel):
     new_original_url: HttpUrl
 
@@ -125,6 +146,7 @@ class URLPaginatedResponse(BaseModel):
     total_count: int
     skip: int
     limit: int
+
 
 # --- 3. BASE62 COLLISION-SAFE SHORT CODE GENERATOR ---
 
@@ -148,19 +170,53 @@ def generate_collision_safe_short_code(db: Session, max_retries: int = 5) -> str
 
 # --- 4. AUTH & DEVELOPER API ROUTES ---
 
-@app.get("/health")
-def health_check(db: Session = Depends(get_db)):
-    """Verify dependencies required by the API are reachable."""
+@app.get("/health/live", status_code=status.HTTP_200_OK)
+def health_live():
+    """
+    Liveness Probe: Confirms the application process is running and event loop is responsive.
+    Returns 200 OK immediately without querying DB or Redis.
+    """
+    return {"status": "alive"}
+
+@app.get("/health/ready")
+def health_ready(db: Session = Depends(get_db)):
+    """
+    Readiness Probe: Validates external infrastructure dependencies (DB, Redis).
+    Returns 200 OK if all dependencies respond, or 503 Service Unavailable if any dependency fails.
+    """
+    checks = {"database": "unhealthy", "redis": "unhealthy"}
+    is_healthy = True
+
+    # 1. Database Check (SQL SELECT 1)
     try:
         db.execute(text("SELECT 1"))
+        checks["database"] = "healthy"
+    except Exception as e:
+        is_healthy = False
+        checks["database"] = f"unhealthy: {str(e)}"
+
+    # 2. Redis Cache Check (PING)
+    try:
         from app.cache import r
         r.ping()
-    except Exception:
+        checks["redis"] = "healthy"
+    except Exception as e:
+        is_healthy = False
+        checks["redis"] = f"unhealthy: {str(e)}"
+
+    if not is_healthy:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service dependency unavailable",
+            detail={"status": "unready", "checks": checks}
         )
-    return {"status": "ok"}
+
+    return {"status": "ready", "checks": checks}
+
+@app.get("/health")
+def health_legacy_alias(db: Session = Depends(get_db)):
+    """Legacy alias pointing to readiness check for backwards compatibility."""
+    return health_ready(db=db)
+
 
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: UserSignupRequest, db: Session = Depends(get_db)):
@@ -205,8 +261,63 @@ def list_api_keys(user: UserModel = Depends(get_current_user), db: Session = Dep
         for r in records
     ]
 
+# --- GOOGLE OAUTH 2.0 ENDPOINTS ---
+
+@v1_router.get("/auth/google/login")
+@app.get("/auth/google/login")
+def google_login():
+    """Generates OAuth2 authorization URL with CSRF state parameter."""
+    state = generate_oauth_state()
+    redirect_uri = "http://localhost:8000/auth/google/callback"
+    client_id = "demo_google_client_id.apps.googleusercontent.com"
+    auth_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&"
+        f"scope=openid%20email%20profile&state={state}"
+    )
+    return {"authorization_url": auth_url, "state": state}
+
+@v1_router.get("/auth/google/callback")
+@app.get("/auth/google/callback")
+def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """
+    OAuth2 Callback Handler:
+    1. Validates CSRF state token to prevent CSRF attacks.
+    2. Exchanges auth code for user profile.
+    3. Links existing local password user or creates new user.
+    4. Issues platform JWT token.
+    """
+    if not verify_and_consume_oauth_state(state):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSRF State parameter validation failed or expired"
+        )
+
+    profile = fetch_google_user_profile(code)
+    email = profile.get("email")
+    google_sub = profile.get("sub")
+
+    if not email or not google_sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to retrieve email or identity from Google OAuth"
+        )
+
+    user = crud.create_or_link_oauth_user(db, email=email, google_sub=google_sub)
+    token = create_access_token(data={"sub": user.username})
+
+    return {
+        "message": "Google OAuth login successful",
+        "username": user.username,
+        "email": user.email,
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
 # --- 5. URL CORE ENDPOINTS ---
 
+
+@v1_router.post("/shorten", response_model=URLShortenResponse, status_code=status.HTTP_201_CREATED)
 @app.post("/shorten", response_model=URLShortenResponse, status_code=status.HTTP_201_CREATED)
 def shorten_url(
     payload: URLShortenRequest, 
@@ -227,6 +338,36 @@ def shorten_url(
         clicks=db_url.clicks,
         created_at=db_url.created_at.isoformat()
     )
+
+@v2_router.post("/shorten", response_model=URLShortenV2Response, status_code=status.HTTP_201_CREATED)
+def shorten_url_v2(
+    payload: URLShortenRequest, 
+    db: Session = Depends(get_db), 
+    owner: UserModel = Depends(limit_api_key_rate)
+):
+    """
+    V2 Breaking Change: Reshapes response JSON payload to nest fields under 'data' and 'api_version'.
+    """
+    original_url_str = str(payload.url)
+    short_code = generate_collision_safe_short_code(db)
+    
+    db_url = crud.create_short_url(db, short_code=short_code, original_url=original_url_str, owner_id=owner.id)
+    set_cached_url(short_code, original_url_str)
+
+    return URLShortenV2Response(
+        data=URLShortenV2Data(
+            short_code=short_code,
+            short_url=f"http://localhost:8000/{short_code}",
+            target_url=db_url.original_url,
+            clicks=db_url.clicks,
+            created_at=db_url.created_at.isoformat()
+        ),
+        api_version="v2"
+    )
+
+app.include_router(v1_router)
+app.include_router(v2_router)
+
 
 @app.get("/urls", response_model=URLPaginatedResponse)
 def list_urls(

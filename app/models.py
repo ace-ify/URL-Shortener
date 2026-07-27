@@ -8,8 +8,11 @@ class UserModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
-    password_hash = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
+    google_sub = Column(String, unique=True, index=True, nullable=True)
+    password_hash = Column(String, nullable=True)
     role = Column(String, default="user", nullable=False)
+
     created_at = Column(
         DateTime, 
         default=lambda: datetime.now(timezone.utc), 
