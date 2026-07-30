@@ -9,9 +9,14 @@ from pydantic import BaseModel, HttpUrl, field_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, engine, Base
+import app.models as models
+
+Base.metadata.create_all(bind=engine)
+
 from app import crud
 from app.cache import get_cached_url, set_cached_url
+
 from app.rate_limiter import limit_ip_rate, limit_api_key_rate
 from app.auth import (
     hash_password, verify_password, create_access_token, 
