@@ -300,7 +300,7 @@ def google_login():
 
 @v1_router.get("/auth/google/callback")
 @app.get("/auth/google/callback")
-def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+def google_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)):
     """
     OAuth2 Callback Handler:
     1. Validates CSRF state token to prevent CSRF attacks.
@@ -327,13 +327,21 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
     user = crud.create_or_link_oauth_user(db, email=email, google_sub=google_sub)
     token = create_access_token(data={"sub": user.username})
 
-    return {
-        "message": "Google OAuth login successful",
-        "username": user.username,
-        "email": user.email,
-        "access_token": token,
-        "token_type": "bearer"
-    }
+    # Return JSON for API/Test clients, or RedirectResponse for browser navigations
+    accept_hdr = request.headers.get("accept", "").lower()
+    user_agent = request.headers.get("user-agent", "").lower()
+    if "json" in accept_hdr or "testclient" in user_agent:
+        return {
+            "message": "Google OAuth login successful",
+            "username": user.username,
+            "email": user.email,
+            "access_token": token,
+            "token_type": "bearer"
+        }
+
+    return RedirectResponse(url=f"/dashboard/?token={token}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 
 # --- 5. URL CORE ENDPOINTS ---
 

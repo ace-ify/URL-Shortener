@@ -484,28 +484,26 @@
             }
         }
 
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('token')) {
+            authToken = urlParams.get('token');
+            localStorage.setItem('token', authToken);
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
         async function handleGoogleAuth() {
             try {
                 const loginRes = await fetch('/auth/google/login');
                 const loginData = await loginRes.json();
-                const state = loginData.state;
-
-                const cbRes = await fetch(`/auth/google/callback?code=demo_code&state=${state}`);
-                const cbData = await cbRes.json();
-
-                if (!cbRes.ok) {
-                    throw new Error(cbData.error?.message || cbData.detail || `HTTP ${cbRes.status}`);
-                }
-
-                authToken = cbData.access_token;
-                localStorage.setItem('token', authToken);
-                closeAuthModal();
-                updateAuthUI();
-                fetchUrls();
+                if (!loginRes.ok) throw new Error(loginData.detail || 'Failed to start Google OAuth');
+                
+                // Redirect browser to Google Authorization Screen
+                window.location.href = loginData.authorization_url;
             } catch (err) {
                 alert('Google OAuth Error: ' + err.message);
             }
         }
+
 
 
 
