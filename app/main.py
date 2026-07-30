@@ -22,6 +22,8 @@ from app.models import UserModel, APIKeyModel
 
 from app.middleware import LoggingAndRedactionMiddleware, V1DeprecationMiddleware
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(
     title="SaaS-Grade URL Shortener Platform",
     description="Multi-tenant shortener with Dual Auth (JWT & API Keys), Redis Caching, Base62 Collision Protection & Async Click Queue",
@@ -31,8 +33,11 @@ app = FastAPI(
 app.add_middleware(LoggingAndRedactionMiddleware)
 app.add_middleware(V1DeprecationMiddleware)
 
+app.mount("/dashboard", StaticFiles(directory="static", html=True), name="static")
+
 v1_router = APIRouter(prefix="/v1")
 v2_router = APIRouter(prefix="/v2")
+
 
 
 
