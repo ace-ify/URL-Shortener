@@ -24,13 +24,18 @@ def upgrade() -> None:
     op.create_table('users',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('username', sa.String(), nullable=False),
-    sa.Column('password_hash', sa.String(), nullable=False),
+    sa.Column('email', sa.String(), nullable=True),
+    sa.Column('google_sub', sa.String(), nullable=True),
+    sa.Column('password_hash', sa.String(), nullable=True),
     sa.Column('role', sa.String(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=False)
     op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=True)
+    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+    op.create_index(op.f('ix_users_google_sub'), 'users', ['google_sub'], unique=True)
+
     op.create_table('api_keys',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),

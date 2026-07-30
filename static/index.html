@@ -484,14 +484,31 @@
             }
         }
 
-        function handleGoogleAuth() {
-            fetch('/auth/google/login')
-                .then(r => r.json())
-                .then(data => {
-                    alert('Simulated Google OAuth Authorization Redirect:\nState: ' + data.state);
-                    window.location.href = `/auth/google/callback?code=demo_code&state=${data.state}`;
-                });
+        async function handleGoogleAuth() {
+            try {
+                const loginRes = await fetch('/auth/google/login');
+                const loginData = await loginRes.json();
+                const state = loginData.state;
+
+                const cbRes = await fetch(`/auth/google/callback?code=demo_code&state=${state}`);
+                const cbData = await cbRes.json();
+
+                if (!cbRes.ok) {
+                    throw new Error(cbData.error?.message || cbData.detail || `HTTP ${cbRes.status}`);
+                }
+
+                authToken = cbData.access_token;
+                localStorage.setItem('token', authToken);
+                closeAuthModal();
+                updateAuthUI();
+                fetchUrls();
+                alert(`Google OAuth Login Successful!\nWelcome ${cbData.email || cbData.username}!`);
+            } catch (err) {
+                alert('Google OAuth Error: ' + err.message);
+            }
         }
+
+
 
         function logout() {
             authToken = '';

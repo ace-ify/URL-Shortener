@@ -55,6 +55,14 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
         content={"error": {"code": exc.status_code, "message": exc.detail}}
     )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"error": {"code": 500, "message": str(exc)}}
+    )
+
+
 @app.exception_handler(PermissionError)
 async def custom_permission_error_handler(request: Request, exc: PermissionError):
     return JSONResponse(
