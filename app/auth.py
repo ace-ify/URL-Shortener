@@ -171,6 +171,7 @@ def verify_and_consume_oauth_state(state: str) -> bool:
 
 import urllib.request
 import urllib.parse
+import urllib.error
 
 def fetch_google_user_profile(code: str) -> dict:
     """
@@ -178,30 +179,43 @@ def fetch_google_user_profile(code: str) -> dict:
     If GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set in settings/.env, executes
     real HTTP request to Google's token and userinfo endpoints. Otherwise falls back to dev mode.
     """
-    if settings.google_client_id and settings.google_client_secret:
-        token_url = "https://oauth2.googleapis.com/token"
-        data = urllib.parse.urlencode({
-            "code": code,
-            "client_id": settings.google_client_id,
-            "client_secret": settings.google_client_secret,
-            "redirect_uri": "http://localhost:8000/auth/google/callback",
-            "grant_type": "authorization_code"
-        }).encode("utf-8")
+    if settings.google_client_id and settings.google_client_secret and code != "demo_code":
+        try:
+            token_url = "https://oauth2.googleapis.com/token"
+            data = urllib.parse.urlencode({
+                "code": code,
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "redirect_uri": "http://localhost:8000/auth/google/callback",
+                "grant_type": "authorization_code"
+            }).encode("utf-8")
 
-        req = urllib.request.Request(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(req) as resp:
-            token_data = json.loads(resp.read().decode("utf-8"))
-            access_token = token_data.get("access_token")
+            req = urllib.request.Request(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with urllib.request.urlopen(req) as resp:
+                token_data = json.loads(resp.read().decode("utf-8"))
+                access_token = token_data.get("access_token")
 
-        userinfo_url = "https://www.googleapis.com/oauth2/v2/userinfo"
-        req_profile = urllib.request.Request(userinfo_url, headers={"Authorization": f"Bearer {access_token}"})
-        with urllib.request.urlopen(req_profile) as resp_profile:
-            return json.loads(resp_profile.read().decode("utf-8"))
+            userinfo_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+            req_profile = urllib.request.Request(userinfo_url, headers={"Authorization": f"Bearer {access_token}"})
+            with urllib.request.urlopen(req_profile) as resp_profile:
+                return json.loads(resp_profile.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else ""
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Google OAuth Exchange Failed: {error_body or e.reason}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Google OAuth Connection Error: {str(e)}"
+            )
 
-    # Local dev mode fallback when real Client ID/Secret are not set in .env
+    # Local dev mode fallback when real Client ID/Secret are not set or when using demo_code
     return {
         "email": "user@gmail.com",
         "sub": "google_sub_109283019283",
         "email_verified": True
     }
+
 
