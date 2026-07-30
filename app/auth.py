@@ -1,9 +1,10 @@
 import secrets
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-import jwt # Standard pyjwt fallback
+import jwt
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import UserModel, APIKeyModel
@@ -16,7 +17,8 @@ SECRET_KEY = settings.secret_key
 ALGORITHM = settings.algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login",auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -186,9 +188,10 @@ def fetch_google_user_profile(code: str) -> dict:
                 "code": code,
                 "client_id": settings.google_client_id,
                 "client_secret": settings.google_client_secret,
-                "redirect_uri": "http://localhost:8000/auth/google/callback",
+                "redirect_uri": settings.google_redirect_uri,
                 "grant_type": "authorization_code"
             }).encode("utf-8")
+
 
             req = urllib.request.Request(token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
             with urllib.request.urlopen(req) as resp:

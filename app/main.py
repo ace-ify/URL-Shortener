@@ -288,8 +288,9 @@ def list_api_keys(user: UserModel = Depends(get_current_user), db: Session = Dep
 def google_login():
     """Generates OAuth2 authorization URL with CSRF state parameter."""
     state = generate_oauth_state()
-    redirect_uri = "http://localhost:8000/auth/google/callback"
+    redirect_uri = settings.google_redirect_uri
     client_id = settings.google_client_id or "demo_google_client_id.apps.googleusercontent.com"
+
     auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
         f"response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&"
