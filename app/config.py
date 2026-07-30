@@ -11,7 +11,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 
 settings = Settings()
 

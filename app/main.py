@@ -17,7 +17,9 @@ Base.metadata.create_all(bind=engine)
 from app import crud
 from app.cache import get_cached_url, set_cached_url
 
+from app.config import settings
 from app.rate_limiter import limit_ip_rate, limit_api_key_rate
+
 from app.auth import (
     hash_password, verify_password, create_access_token, 
     get_current_user, get_api_key_owner,
@@ -287,13 +289,14 @@ def google_login():
     """Generates OAuth2 authorization URL with CSRF state parameter."""
     state = generate_oauth_state()
     redirect_uri = "http://localhost:8000/auth/google/callback"
-    client_id = "demo_google_client_id.apps.googleusercontent.com"
+    client_id = settings.google_client_id or "demo_google_client_id.apps.googleusercontent.com"
     auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
         f"response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&"
         f"scope=openid%20email%20profile&state={state}"
     )
     return {"authorization_url": auth_url, "state": state}
+
 
 @v1_router.get("/auth/google/callback")
 @app.get("/auth/google/callback")
