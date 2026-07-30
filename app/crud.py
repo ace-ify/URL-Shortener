@@ -51,9 +51,10 @@ def create_or_link_oauth_user(db: Session, email: str, google_sub: str) -> UserM
         username=username,
         email=email,
         google_sub=google_sub,
-        password_hash=None,
+        password_hash="!OAUTH_USER_NO_PASSWORD!",
         role="user"
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
