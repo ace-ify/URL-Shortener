@@ -76,12 +76,20 @@ def create_shortened_url_service(db: Session, payload: URLShortenRequest, owner:
     )
 
 def handle_url_redirect_service(db: Session, short_code: str) -> RedirectResponse:
-    """Service for public link redirects: Cache lookup, expiration check (HTTP 410), & atomic click buffer."""
+    """Service for public link redirects: Cache lookup, expiration check (HTTP 410), & non-blocking Redis Queue push (< 0.2ms)."""
+    # 1. Cache Read (Sub-millisecond hot path)
+    cached_url = get_cached_url(short_code)
+    if cached_url:
+        from app.queue import push_click_event
+        push_click_event(short_code)  # Non-blocking async queue push (< 0.2ms)
+        return RedirectResponse(url=cached_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    # 2. Database Fallback (Cache Miss)
     db_url = crud.get_url_by_code(db, short_code)
     if not db_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Short URL not found")
 
-    # Expiration check (HTTP 410 Gone)
+    # 3. Expiration Check (HTTP 410 Gone)
     if db_url.expires_at:
         now_utc = datetime.now(timezone.utc)
         exp_utc = db_url.expires_at.replace(tzinfo=timezone.utc) if db_url.expires_at.tzinfo is None else db_url.expires_at
@@ -91,14 +99,8 @@ def handle_url_redirect_service(db: Session, short_code: str) -> RedirectRespons
                 detail="This short link has expired."
             )
 
-    # High-throughput atomic click counter buffer (< 0.1ms) & DB count update
-    increment_click_buffer(short_code)
-    db_url.clicks = db_url.clicks + 1
-    db.commit()
-
-    cached_url = get_cached_url(short_code)
-    if cached_url:
-        return RedirectResponse(url=cached_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-
     set_cached_url(short_code, db_url.original_url)
+    from app.queue import push_click_event
+    push_click_event(short_code)  # Non-blocking async queue push (< 0.2ms)
     return RedirectResponse(url=db_url.original_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+

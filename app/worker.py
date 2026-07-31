@@ -5,32 +5,55 @@ from app.database import SessionLocal
 from app import crud
 
 QUEUE_NAME = "click_events_queue"
+DLQ_NAME = "click_events_dlq"
+MAX_RETRIES = 3
+
+def process_single_event(short_code: str) -> bool:
+    """Attempts DB click increment with Session management."""
+    db = SessionLocal()
+    try:
+        crud.increment_clicks(db, short_code)
+        return True
+    except Exception as e:
+        print(f"❌ [Worker DB Error] Failed to update clicks for {short_code}: {e}")
+        return False
+    finally:
+        db.close()
 
 def run_worker():
-    print("🚀 [Analytics Worker] Started! Listening for click events on Redis queue...")
+    print(f"🚀 [Analytics Worker] Started! Listening on Redis queue '{QUEUE_NAME}' (DLQ: '{DLQ_NAME}')...")
     while True:
         try:
             # BLPOP: Redis blocking pop (waits up to 5 seconds for a new event)
             result = r.blpop(QUEUE_NAME, timeout=5)
             if not result:
                 continue
-                
-            # result is a tuple: (queue_name, payload_json_string)
+
             _, payload_str = result
             event = json.loads(payload_str)
             short_code = event.get("short_code")
-            
-            if short_code:
-                db = SessionLocal()
-                try:
-                    crud.increment_clicks(db, short_code)
-                    print(f"✅ [Analytics Worker] Incremented click count for short_code: {short_code}")
-                except Exception as db_err:
-                    print(f"❌ [Analytics Worker DB Error] {db_err}")
-                finally:
-                    db.close()
+            retry_count = event.get("retry_count", 0)
+
+            if not short_code:
+                continue
+
+            success = process_single_event(short_code)
+            if success:
+                print(f"✅ [Analytics Worker] Successfully persisted click for short_code: '{short_code}'")
+            else:
+                retry_count += 1
+                if retry_count <= MAX_RETRIES:
+                    event["retry_count"] = retry_count
+                    print(f"⚠️ [Analytics Worker Retry] Retrying short_code '{short_code}' ({retry_count}/{MAX_RETRIES})...")
+                    r.rpush(QUEUE_NAME, json.dumps(event))
+                    time.sleep(0.5 * (2 ** retry_count))  # Exponential Backoff
+                else:
+                    print(f"🚨 [Analytics Worker DLQ] Max retries reached for '{short_code}'. Pushing to Dead-Letter Queue '{DLQ_NAME}'!")
+                    r.rpush(DLQ_NAME, json.dumps(event))
+
         except Exception as e:
-            print(f"⚠️ [Analytics Worker Error] {e}")
+            print(f"⚠️ [Analytics Worker Loop Error] {e}")
             time.sleep(1)
+
 if __name__ == "__main__":
     run_worker()
