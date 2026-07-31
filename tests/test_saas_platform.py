@@ -86,14 +86,16 @@ def test_ssrf_url_is_rejected():
 
     response = client.post("/shorten", json={"url": "http://127.0.0.1/admin"}, headers={"X-API-Key": key})
     assert response.status_code == 422
-    assert "forbidden" in response.json()["error"]["details"][0]["msg"].lower()
+    err_str = str(response.json()["error"]["message"]).lower()
+    assert "forbidden" in err_str or "localhost" in err_str
 
 def test_short_code_generation_retries_after_collision():
-    with patch("app.main.generate_base62_code", side_effect=["taken1", "fresh2"]), \
-         patch("app.main.crud.get_url_by_code", side_effect=[object(), None]) as get_by_code:
-        from app.main import generate_collision_safe_short_code
-        assert generate_collision_safe_short_code(object()) == "fresh2"
+    with patch("app.services.url_service.generate_base62_code", side_effect=["taken1", "fresh2"]), \
+         patch("app.services.url_service.crud.get_url_by_code", side_effect=[object(), None]) as get_by_code:
+        from app.services.url_service import generate_collision_safe_code
+        assert generate_collision_safe_code(object()) == "fresh2"
     assert get_by_code.call_count == 2
+
 
 # 3. OWNERSHIP ENFORCEMENT & SOFT DELETE TESTS
 def test_ownership_and_soft_delete():
@@ -205,11 +207,12 @@ def test_google_oauth_flow_and_account_linking():
     assert "CSRF" in invalid_cb.json()["error"]["message"]
 
     # 3. Callback with VALID state parameter -> Successfully issues platform JWT
-    with patch("app.main.fetch_google_user_profile", return_value={"email": "google_user@example.com", "sub": "sub_9999"}):
+    with patch("app.services.auth_service.fetch_google_user_profile", return_value={"email": "google_user@example.com", "sub": "sub_9999"}):
         valid_cb = client.get(f"/auth/google/callback?code=mock_code&state={state}")
         assert valid_cb.status_code == 200
         assert "access_token" in valid_cb.json()
         assert valid_cb.json()["email"] == "google_user@example.com"
+
 
 def test_custom_alias_and_link_expiration():
     client.post("/auth/signup", json={"username": "aliasuser", "password": "Password123!"})

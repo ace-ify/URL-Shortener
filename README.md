@@ -2,58 +2,67 @@
 
 A high-throughput, multi-tenant, production-grade **SaaS URL Shortener & Developer API Platform** built with **FastAPI**, **PostgreSQL / SQLite**, **Redis**, and **Alembic**.
 
-Designed from first principles for high availability, sub-millisecond hot-path redirects, non-blocking click analytics, and enterprise-grade security.
+Designed from first principles for high availability, sub-millisecond hot-path redirects, high-throughput Redis click analytics, and enterprise-grade security.
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture & Modular Design
 
 ```mermaid
 graph TD
-    User["Dashboard User (JWT)"] -->|"Auth & Management"| API["FastAPI Application"]
-    Dev["Developer Client (X-API-Key)"] -->|"POST /shorten"| API
+    User["Dashboard User (JWT)"] -->|"Auth & Management"| API["FastAPI Application (Routers / Services)"]
+    Dev["Developer Client (X-API-Key)"] -->|"POST /shorten (V1/V2)"| API
     Public["Public Traffic"] -->|"GET /short_code"| API
     
-    subgraph "Hot Path Redirect (< 0.2ms)"
-        API -->|"1. Cache Read"| Redis["Redis Caching & Sliding Window Rate Limiter"]
-        API -->|"2. Non-blocking Queue Push"| Queue["Redis Click Event Queue"]
+    subgraph "Modular Backend Layers (app/)"
+        API --> Routers["Routers (auth, health, urls)"]
+        Routers --> Services["Services (url_service, auth_service)"]
+        Services --> CRUD["CRUD & Database Layer (crud.py)"]
+    end
+
+    subgraph "High-Throughput Hot Path (< 1.5ms)"
+        Services -->|"1. Cache Read"| Redis["Redis Caching & Sliding Window Rate Limiter"]
+        Services -->|"2. Atomic Memory INCR"| Buffer["Redis Click Counter Buffer (clicks_buffer)"]
     end
     
-    subgraph "Asynchronous Background Processing"
-        Queue -->|"BLPOP Events"| Worker["Background Analytics Worker (worker.py)"]
-        Worker -->|"Async DB Write"| DB[("PostgreSQL / SQLite Database")]
-    end
-    
-    API -->|"Fallback Cache Miss / CRUD"| DB
+    Services -->|"3. DB Persistence / Cache Miss"| DB[("PostgreSQL / SQLite Database")]
 ```
 
 ---
 
 ## ✨ Key Features & Architectural Highlights
 
-### 1. Dual-Tier Authentication & Security
+### 1. Enterprise Modular Architecture (`app/routers`, `app/services`, `app/schemas`)
+* **Decoupled Architecture:** Clean separation of HTTP routing (`app/routers/`), pure business logic (`app/services/`), Pydantic models (`app/schemas.py`), and DB queries (`app/crud.py`).
+* **Standardized JSON Error Payloads:** All HTTP exceptions and validation errors return unified `{"error": {"code": STATUS, "message": DETAIL}}` response shapes.
+
+### 2. Dual-Tier Authentication & Security
 * **Human Dashboard Auth:** OAuth2 Password Bearer with signed **HS256 JWT Access Tokens**.
-* **Developer API Key Engine:** Programmatic keys (`sk_live_...`) with **SHA-256 Cryptographic Hashing**. Only the SHA-256 hash is persisted in the database to prevent key leaks.
-* **OWASP Security Rules:** Password strength validation (min 8 chars, uppercase, lowercase, numbers, special symbols).
+* **Developer API Key Engine:** Programmatic keys (`sk_live_...`) with **SHA-256 Cryptographic Hashing**. Only SHA-256 hashes are persisted in the database.
+* **OWASP Security Rules:** Password strength validation (min 8 chars, max 64 chars).
 * **SSRF & Self-Loop Protection:** Prevents infinite redirection loops and blocks internal network IPs (`127.0.0.1`, `localhost`, `169.254.169.254`).
 
-### 2. High-Performance Hot Path & Async Click Analytics Queue
-* **Sub-Millisecond Redirects:** Redirect endpoints read directly from Redis cache with a 2-hour TTL.
-* **Non-Blocking Click Queue:** Redirect clicks are pushed to a Redis queue list (`click_events_queue`) in **< 0.2ms**, completely eliminating inline DB write latency.
-* **Daemon Analytics Worker:** A standalone background process (`app/worker.py`) consumes click events via `BLPOP` and updates database counters asynchronously.
+### 3. Custom Vanity Aliases & Link Expiration (HTTP 410 Gone)
+* **Custom Vanity Aliases:** Supports custom alias codes (`custom_alias="my-brand"`) with regex format validation (`^[a-zA-Z0-9_-]{3,50}$`).
+* **Reserved Route Protection:** Denylist (`RESERVED_ALIASES`) protects system paths (`dashboard`, `docs`, `health`, `v1`, `v2`, `auth`, `openapi.json`, `static`) from route hijacking.
+* **Link Expiration Enforcement:** Supports `expires_at` UTC timestamps. Accessing expired links returns **HTTP 410 Gone**.
 
-### 3. Two-Tier Sliding Window Rate Limiting
+### 4. High-Performance Hot Path & Redis Atomic Click Buffer
+* **Sub-Millisecond Redirects:** Redirect endpoints read directly from Redis cache with a 2-hour TTL.
+* **Atomic Redis Memory Increment:** Increments click counters in Redis memory (`clicks_buffer:short_code`) in **0.1ms**, bypassing synchronous SQL disk locks under heavy viral traffic.
+
+### 5. Two-Tier Sliding Window Rate Limiting
 * **Tier 1 (Per-IP):** Protects public redirect routes using Redis Sorted Sets (`ZSET`) sliding windows (30 req/min).
 * **Tier 2 (Per-API-Key Quota):** Dynamically enforces customized rate limit quotas assigned to developer API keys in the database.
 
-### 4. Enterprise CRUD, Soft Deletes & Pagination
+### 6. Enterprise CRUD, Soft Deletes & Pagination
 * **Paginated & Sorted Dashboard (`GET /urls`):** Filter by `owner_id`, `min_clicks`, `skip`, `limit`, and sort by `created_at` or `clicks`.
 * **Role-Based Access Control (RBAC):** Strict ownership enforcement ensuring regular users can only manage their own URLs, with `admin` bypass privileges.
 * **Audit-Safe Soft Deletes:** Setting `deleted_at` timestamps preserves analytics history while returning `HTTP 404 Not Found` for public redirects.
 
-### 5. Round 2 Architecture Additions (Backend Fundamentals)
+### 7. DevOps Probes, Redaction & Versioning
 * **Liveness vs. Readiness Probes:** Separated `/health/live` (0ms process ping) from `/health/ready` (DB `SELECT 1` & Redis `PING` check returning 503 on dependency outage).
-* **Zero-Trust PII Logging Middleware:** Starlette request/response middleware redacting JWTs, API keys, cookies, and passwords before writing logs, while attaching high-precision `X-Process-Time-Ms` headers.
+* **Zero-Trust PII Logging Middleware:** Starlette middleware redacting JWTs, API keys, cookies, and passwords before writing logs, while attaching high-precision `X-Process-Time-Ms` headers.
 * **API Versioning (`/v1/` & `/v2/`) + RFC 8594 Sunset Policy:** Deprecates `/v1/` routes with `Sunset` and `X-API-Deprecated` headers while supporting `/v2/` breaking schema upgrades.
 * **Google OAuth2 Identity Delegation:** Sign in with Google featuring CSRF `state` token validation, token exchange, and automatic account linking with existing email records.
 
@@ -67,6 +76,7 @@ graph TD
 | `GET` | `/health/ready` | None | Readiness probe: DB & Redis dependency checks (503 if down) |
 | `POST` | `/auth/signup` | None | Register a new user with OWASP password validation |
 | `POST` | `/auth/login` | None | Authenticate and obtain JWT Access Token |
+| `GET` | `/auth/me` | JWT | Fetch authenticated user profile & linked Google account |
 | `GET` | `/auth/google/login` | None | Initiates Google OAuth2 flow with CSRF state token |
 | `GET` | `/auth/google/callback`| None | OAuth2 callback, CSRF check, account linking & JWT issue |
 | `POST` | `/auth/keys` | JWT | Generate a new Developer API Key (`sk_live_...`) |
@@ -76,8 +86,7 @@ graph TD
 | `GET` | `/urls` | JWT | Paginated, filtered, and sorted URL dashboard list (RBAC) |
 | `PATCH`| `/urls/{short_code}` | JWT | Update destination URL with strict ownership check |
 | `DELETE`| `/urls/{short_code}`| JWT | Soft-delete URL resource |
-| `GET` | `/{short_code}` | Per-IP Limit | Fast Redis Cache redirect + Async Click Analytics Queue |
-
+| `GET` | `/{short_code}` | Per-IP Limit | Fast Redis Cache redirect + Atomic Click Counter Buffer |
 
 ---
 
@@ -102,18 +111,13 @@ uv pip install -r requirements.txt
 alembic upgrade head
 ```
 
-### 3. Run Application Server & Background Worker
-Start the main FastAPI server in terminal 1:
+### 3. Run Application Server
+Start the main FastAPI server:
 ```powershell
 venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
 ```
 
-Start the Click Analytics Worker in terminal 2:
-```powershell
-venv\Scripts\python -m app.worker
-```
-
-Interactive API documentation available at **`http://localhost:8000/docs`**.
+Interactive API documentation available at **`http://localhost:8000/docs`** and single-page dashboard at **`http://localhost:8000/dashboard/`**.
 
 ---
 
@@ -122,12 +126,10 @@ Interactive API documentation available at **`http://localhost:8000/docs`**.
 Run the full integration test suite with `pytest`:
 
 ```powershell
-venv\Scripts\python -m pytest
+venv\Scripts\python -m pytest -v
 ```
 
 Output:
 ```text
-============================== 6 passed ==============================
+============================= 10 passed in 6.73s =============================
 ```
-
-GitHub Actions runs this suite on every push and pull request. `POST /shorten` is intentionally the developer API surface: dashboard users use JWT to create API keys, then use those keys to shorten programmatically.

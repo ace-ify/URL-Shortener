@@ -14,8 +14,10 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    base_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 
 
 
