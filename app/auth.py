@@ -2,8 +2,10 @@ import secrets
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
+
 import jwt
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -18,6 +20,8 @@ ALGORITHM = settings.algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
+
 
 
 def hash_password(password: str) -> str:
@@ -94,8 +98,13 @@ def create_access_token(data:dict,expires_delta:timedelta=None)->str:
     to_encode.update({"exp":int(expire.timestamp())})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(token:str= Depends(oauth2_scheme), db:Session = Depends(get_db))-> UserModel:
+def get_current_user(
+    token_bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    token_oauth: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+) -> UserModel:
     """FastAPI dependency to extract human user from JWT token"""
+    token = (token_bearer.credentials if token_bearer else None) or token_oauth
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
