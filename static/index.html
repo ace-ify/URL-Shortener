@@ -419,10 +419,23 @@
         let authToken = localStorage.getItem('token') || '';
         let currentApiKey = localStorage.getItem('apiKey') || '';
 
-        function updateAuthUI() {
+        async function updateAuthUI() {
             const userBadge = document.getElementById('userBadge');
             const authBar = document.getElementById('authBar');
             if (authToken) {
+                try {
+                    const res = await fetch('/auth/me', {
+                        headers: { 'Authorization': `Bearer ${authToken}` }
+                    });
+                    if (res.ok) {
+                        const me = await res.json();
+                        const emailText = me.email ? `🟢 ${me.email} (${me.google_sub ? 'Google OAuth' : 'Password'})` : `🟢 User: ${me.username}`;
+                        userBadge.innerText = emailText;
+                        userBadge.className = 'badge-success';
+                        authBar.innerHTML = `<button class="btn-secondary" onclick="logout()">Logout</button>`;
+                        return;
+                    }
+                } catch (e) {}
                 userBadge.innerText = 'Authenticated User Session 🟢';
                 userBadge.className = 'badge-success';
                 authBar.innerHTML = `<button class="btn-secondary" onclick="logout()">Logout</button>`;
@@ -435,6 +448,7 @@
                 `;
             }
         }
+
 
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));

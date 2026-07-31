@@ -273,8 +273,27 @@ def create_api_key(
         plain_key=plain_key
     )
 
+class UserProfileResponse(BaseModel):
+    id: int
+    username: str
+    email: Optional[str] = None
+    google_sub: Optional[str] = None
+    role: str
+
+@app.get("/auth/me", response_model=UserProfileResponse)
+def get_current_user_profile(user: UserModel = Depends(get_current_user)):
+    """Returns the authenticated user profile including email and Google OAuth linkage details."""
+    return UserProfileResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        google_sub=user.google_sub,
+        role=user.role
+    )
+
 @app.get("/auth/keys", response_model=List[APIKeyResponse])
 def list_api_keys(user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
+
     records = crud.get_user_api_keys(db, user.id)
     return [
         APIKeyResponse(id=r.id, prefix=r.prefix, label=r.label, rate_limit=r.rate_limit)
