@@ -49,6 +49,8 @@ class URLModel(Base):
         default=lambda: datetime.now(timezone.utc), 
         nullable=False
     )
+    expires_at = Column(DateTime, nullable=True)
     deleted_at = Column(DateTime, nullable=True)
 
     owner = relationship("UserModel", back_populates="urls")
+

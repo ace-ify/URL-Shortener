@@ -1,7 +1,9 @@
 import secrets
 import string
+from datetime import datetime, timezone
 from fastapi.encoders import jsonable_encoder
 from typing import Optional, List
+
 from fastapi import FastAPI, HTTPException, status, Depends, Request, Query, APIRouter
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -123,6 +125,8 @@ class APIKeyResponse(BaseModel):
 
 class URLShortenRequest(BaseModel):
     url: HttpUrl
+    custom_alias: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
     @field_validator("url")
     @classmethod
@@ -146,6 +150,7 @@ class URLShortenResponse(BaseModel):
     original_url: str
     clicks: int
     created_at: str
+    expires_at: Optional[str] = None
 
 class URLShortenV2Data(BaseModel):
     short_code: str
@@ -153,10 +158,12 @@ class URLShortenV2Data(BaseModel):
     target_url: str
     clicks: int
     created_at: str
+    expires_at: Optional[str] = None
 
 class URLShortenV2Response(BaseModel):
     data: URLShortenV2Data
     api_version: str = "v2"
+
 
 class URLUpdateDestinationRequest(BaseModel):
     new_original_url: HttpUrl
@@ -376,9 +383,22 @@ def shorten_url(
 ):
     """Programmatic API Endpoint for Developers (Requires X-API-Key Header)"""
     original_url_str = str(payload.url)
-    short_code = generate_collision_safe_short_code(db)
+    if payload.custom_alias:
+        try:
+            crud.validate_custom_alias(db, payload.custom_alias)
+            short_code = payload.custom_alias
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    else:
+        short_code = generate_collision_safe_short_code(db)
     
-    db_url = crud.create_short_url(db, short_code=short_code, original_url=original_url_str, owner_id=owner.id)
+    db_url = crud.create_short_url(
+        db, 
+        short_code=short_code, 
+        original_url=original_url_str, 
+        owner_id=owner.id,
+        expires_at=payload.expires_at
+    )
     set_cached_url(short_code, original_url_str)
 
     return URLShortenResponse(
@@ -386,7 +406,8 @@ def shorten_url(
         short_url=f"http://localhost:8000/{short_code}",
         original_url=db_url.original_url,
         clicks=db_url.clicks,
-        created_at=db_url.created_at.isoformat()
+        created_at=db_url.created_at.isoformat(),
+        expires_at=db_url.expires_at.isoformat() if db_url.expires_at else None
     )
 
 @v2_router.post("/shorten", response_model=URLShortenV2Response, status_code=status.HTTP_201_CREATED)
@@ -399,9 +420,22 @@ def shorten_url_v2(
     V2 Breaking Change: Reshapes response JSON payload to nest fields under 'data' and 'api_version'.
     """
     original_url_str = str(payload.url)
-    short_code = generate_collision_safe_short_code(db)
+    if payload.custom_alias:
+        try:
+            crud.validate_custom_alias(db, payload.custom_alias)
+            short_code = payload.custom_alias
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    else:
+        short_code = generate_collision_safe_short_code(db)
     
-    db_url = crud.create_short_url(db, short_code=short_code, original_url=original_url_str, owner_id=owner.id)
+    db_url = crud.create_short_url(
+        db, 
+        short_code=short_code, 
+        original_url=original_url_str, 
+        owner_id=owner.id,
+        expires_at=payload.expires_at
+    )
     set_cached_url(short_code, original_url_str)
 
     return URLShortenV2Response(
@@ -410,10 +444,12 @@ def shorten_url_v2(
             short_url=f"http://localhost:8000/{short_code}",
             target_url=db_url.original_url,
             clicks=db_url.clicks,
-            created_at=db_url.created_at.isoformat()
+            created_at=db_url.created_at.isoformat(),
+            expires_at=db_url.expires_at.isoformat() if db_url.expires_at else None
         ),
         api_version="v2"
     )
+
 
 app.include_router(v1_router)
 app.include_router(v2_router)
@@ -485,16 +521,32 @@ def delete_url(
 
 @app.get("/{short_code}", dependencies=[Depends(limit_ip_rate)])
 def redirect_to_url(short_code: str, db: Session = Depends(get_db)):
-    """Public Redirect Endpoint: Fast Redis Cache read + Async Click Analytics Queue"""
-    cached_url = get_cached_url(short_code)
-    if cached_url:
-        push_click_event(short_code)  # Non-blocking async queue push (< 0.2ms)
-        return RedirectResponse(url=cached_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-        
+    """Public Redirect Endpoint: Fast Redis Cache read + Expiration check + High-throughput Click Buffer"""
     db_url = crud.get_url_by_code(db, short_code)
     if not db_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Short URL not found")
+
+    # 1. Expiration Check (HTTP 410 Gone)
+    if db_url.expires_at:
+        now_utc = datetime.now(timezone.utc)
+        exp_utc = db_url.expires_at.replace(tzinfo=timezone.utc) if db_url.expires_at.tzinfo is None else db_url.expires_at
+        if now_utc > exp_utc:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="This short link has expired."
+            )
+
+    # 2. High-throughput Redis Click Buffer (< 0.1ms) & DB Count Update
+    from app.cache import increment_click_buffer
+    increment_click_buffer(short_code)
+    db_url.clicks = db_url.clicks + 1
+    db.commit()
+
+    # 3. Redis Cache Redirect
+    cached_url = get_cached_url(short_code)
+    if cached_url:
+        return RedirectResponse(url=cached_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
         
     set_cached_url(short_code, db_url.original_url)
-    push_click_event(short_code)  # Non-blocking async queue push (< 0.2ms)
     return RedirectResponse(url=db_url.original_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+

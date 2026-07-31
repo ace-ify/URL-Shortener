@@ -211,6 +211,57 @@ def test_google_oauth_flow_and_account_linking():
         assert "access_token" in valid_cb.json()
         assert valid_cb.json()["email"] == "google_user@example.com"
 
+def test_custom_alias_and_link_expiration():
+    client.post("/auth/signup", json={"username": "aliasuser", "password": "Password123!"})
+    token = client.post("/auth/login", json={"username": "aliasuser", "password": "Password123!"}).json()["access_token"]
+    key = client.post("/auth/keys", json={}, headers={"Authorization": f"Bearer {token}"}).json()["plain_key"]
+
+    # 1. Custom Alias creation -> Success
+    alias_res = client.post(
+        "/shorten", 
+        json={"url": "https://example.com/custom", "custom_alias": "my-brand-link"}, 
+        headers={"X-API-Key": key}
+    )
+    assert alias_res.status_code == 201
+    assert alias_res.json()["short_code"] == "my-brand-link"
+
+    # Redirect to custom alias -> 307
+    alias_redir = client.get("/my-brand-link", follow_redirects=False)
+    assert alias_redir.status_code == 307
+
+    # 2. Reserved Keyword Custom Alias -> 400 Bad Request
+
+    reserved_res = client.post(
+        "/shorten", 
+        json={"url": "https://example.com/reserved", "custom_alias": "dashboard"}, 
+        headers={"X-API-Key": key}
+    )
+    assert reserved_res.status_code == 400
+    assert "reserved" in reserved_res.json()["error"]["message"]
+
+    # 3. Duplicate Custom Alias -> 400 Bad Request
+    dup_res = client.post(
+        "/shorten", 
+        json={"url": "https://example.com/dup", "custom_alias": "my-brand-link"}, 
+        headers={"X-API-Key": key}
+    )
+    assert dup_res.status_code == 400
+
+    # 4. Link Expiration -> Expired link returns HTTP 410 Gone
+    expired_time = "2020-01-01T00:00:00Z"
+    exp_res = client.post(
+        "/shorten", 
+        json={"url": "https://example.com/expired", "expires_at": expired_time}, 
+        headers={"X-API-Key": key}
+    )
+    assert exp_res.status_code == 201
+    exp_code = exp_res.json()["short_code"]
+
+    exp_redir = client.get(f"/{exp_code}")
+    assert exp_redir.status_code == 410
+    assert "expired" in exp_redir.json()["error"]["message"]
+
+
 
 
 

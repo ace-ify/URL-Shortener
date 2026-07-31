@@ -82,13 +82,36 @@ def create_api_key_for_user(db: Session, user_id: int, label: str = "Default Key
 def get_user_api_keys(db: Session, user_id: int):
     return db.query(APIKeyModel).filter(APIKeyModel.user_id == user_id).all()
 
+import re
+
+RESERVED_ALIASES = {
+    "dashboard", "docs", "health", "v1", "v2", "auth",
+    "openapi.json", "static", "urls", "favicon.ico", "login", "signup"
+}
+
+def validate_custom_alias(db: Session, alias: str):
+    alias_lower = alias.lower()
+    if alias_lower in RESERVED_ALIASES:
+        raise ValueError(f"Custom alias '{alias}' is a reserved system keyword")
+    if not re.match(r"^[a-zA-Z0-9_-]{3,50}$", alias):
+        raise ValueError("Custom alias must be 3 to 50 alphanumeric characters, underscores, or hyphens")
+    existing = db.query(URLModel).filter(URLModel.short_code == alias).first()
+    if existing:
+        raise ValueError(f"Short code or alias '{alias}' is already taken")
+
 # --- URL CRUD & PAGINATION OPERATIONS ---
-def create_short_url(db: Session, short_code: str, original_url: str, owner_id: int = None) -> URLModel:
-    db_url = URLModel(short_code=short_code, original_url=original_url, owner_id=owner_id)
+def create_short_url(db: Session, short_code: str, original_url: str, owner_id: int = None, expires_at: datetime = None) -> URLModel:
+    db_url = URLModel(
+        short_code=short_code, 
+        original_url=original_url, 
+        owner_id=owner_id,
+        expires_at=expires_at
+    )
     db.add(db_url)
     db.commit()
     db.refresh(db_url)
     return db_url
+
 
 def get_url_by_code(db: Session, short_code: str) -> URLModel:
     """Fetch URL by code only if it has not been soft-deleted"""

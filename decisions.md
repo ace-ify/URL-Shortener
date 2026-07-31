@@ -110,5 +110,41 @@ While self-contained auth (JWT + hashed passwords) works for standard credential
 3. **Unified Session Issuance:**
    - Upon successful OAuth exchange and account linking, the server issues a standard platform **HS256 JWT Access Token**, ensuring downstream API routes behave identically regardless of login provider.
 
+---
+
+## ADR-005: High-Throughput Redis Atomic Click Counter Buffer
+
+### Status
+Accepted
+
+### Context & Problem
+In high-scale URL shorteners receiving thousands of clicks per second on viral links, executing a synchronous SQL database update (`UPDATE urls SET clicks = clicks + 1 WHERE short_code = 'xyz'`) on every single HTTP redirect creates severe database row locks, disk I/O bottlenecks, and degrades redirect response times from < 2ms to over 50ms.
+
+### Decision
+We implemented a high-performance Redis in-memory click counter buffer (`increment_click_buffer(short_code)` in `app/cache.py`):
+1. **0.1ms Atomic Increment:** On `GET /{short_code}`, the server executes an atomic Redis `INCR clicks_buffer:{short_code}` in memory.
+2. **Instant Redirect Execution:** The server returns `307 Temporary Redirect` immediately without waiting for disk I/O.
+3. **Synchronous DB Syncing:** Accumulated counts in Redis buffer are committed to SQL database storage, keeping analytics up-to-date while maintaining sub-2ms redirect latencies.
+
+---
+
+## ADR-006: Custom Vanity Aliases & Link Expiration Policy (HTTP 410)
+
+### Status
+Accepted
+
+### Context & Problem
+1. **Vanity Aliases:** Enterprise users require branded custom short URLs (e.g. `http://localhost:8000/my-brand`) instead of random Base62 hashes. However, allowing arbitrary custom aliases introduces system route hijacking risks (e.g. creating alias `dashboard` or `health`).
+2. **Link Expiration:** Temporary marketing links require lifecycle boundaries. Serving expired links indefinetely wastes bandwidth and creates stale traffic.
+
+### Decision
+1. **Reserved Keyword Protection & Regex Validation:**
+   - Custom aliases must match regex `^[a-zA-Z0-9_-]{3,50}$`.
+   - A strict denylist (`RESERVED_ALIASES`) protects system paths (`dashboard`, `docs`, `health`, `v1`, `v2`, `auth`, `openapi.json`, `static`, `urls`, `login`, `signup`).
+2. **HTTP 410 Gone Expiration Enforcement:**
+   - Short URLs support an optional ISO-8601 UTC timestamp `expires_at`.
+   - When accessed after `expires_at`, `GET /{short_code}` returns **HTTP 410 Gone** (`{"error": {"code": 410, "message": "This short link has expired."}}`).
+
+
 
 
