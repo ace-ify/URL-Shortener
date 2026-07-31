@@ -317,7 +317,8 @@ def google_callback(request: Request, code: str, state: str, db: Session = Depen
 
     profile = fetch_google_user_profile(code)
     email = profile.get("email")
-    google_sub = profile.get("sub")
+    google_sub = profile.get("sub") or profile.get("id")
+
 
     if not email or not google_sub:
         raise HTTPException(
