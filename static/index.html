@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shortener — SaaS URL Platform</title>
+<style>
+:root{
+  --bg:#f2f1ee; --fg:#0a0a0a; --card:#ffffff; --line:#0a0a0a;
+  --muted:#6d6d6d; --rule:#d6d4cf; --shadow:#0a0a0a;
+}
+[data-theme="dark"]{
+  --bg:#0c0c0c; --fg:#efeeec; --card:#161616; --line:#efeeec;
+  --muted:#8d8d8d; --rule:#2a2a2a; --shadow:#000000;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,.serif{font-family:Georgia,"Times New Roman",serif;font-weight:400;letter-spacing:-.02em}
+a{color:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+.rule{border-top:1px solid var(--rule)}
+.eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+
+/* ---------- masthead ---------- */
+header{border-bottom:2px solid var(--line)}
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:28px 0 18px;flex-wrap:wrap}
+.masthead h1{font-size:clamp(38px,7vw,76px);line-height:.92;margin:6px 0 0}
+.masthead .sub{max-width:34ch;color:var(--muted);font-size:13px;margin-top:10px}
+.mast-right{display:flex;align-items:center;gap:10px}
+.meta-bar{display:flex;gap:0;border-top:1px solid var(--rule);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.meta-bar div{padding:8px 14px;border-right:1px solid var(--rule)}
+.meta-bar div:first-child{padding-left:0}
+
+/* ---------- hard 3d controls ---------- */
+button,.btn{
+  font:inherit;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+  background:var(--card);color:var(--fg);border:2px solid var(--line);
+  box-shadow:4px 4px 0 var(--shadow);padding:9px 14px;cursor:pointer;
+  transition:transform .06s,box-shadow .06s;text-decoration:none;display:inline-block;
+}
+button:hover,.btn:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 var(--shadow)}
+button:active,.btn:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--shadow)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:4px 4px 0 var(--shadow)}
+button.solid{background:var(--fg);color:var(--bg)}
+button.sm{padding:5px 9px;box-shadow:3px 3px 0 var(--shadow);font-size:10px}
+input,select{
+  font:inherit;font-size:13px;background:var(--card);color:var(--fg);
+  border:2px solid var(--line);padding:9px 10px;width:100%;
+}
+input:focus,select:focus{outline:3px solid var(--rule);outline-offset:2px}
+label{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 5px}
+.field{margin-bottom:12px}
+
+/* ---------- editorial grid ---------- */
+section{padding:44px 0}
+.sec-head{display:flex;align-items:baseline;gap:16px;border-bottom:2px solid var(--line);padding-bottom:8px;margin-bottom:26px}
+.sec-head h2{font-size:26px;margin:0}
+.sec-head .num{font-size:11px;letter-spacing:.2em;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.cell{background:var(--bg);padding:20px;grid-column:span 4}
+.cell h3{font-size:19px;margin:6px 0 8px}
+.cell p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.65}
+.cell .k{font-size:11px;letter-spacing:.16em;color:var(--muted)}
+.cell code{font-size:11.5px;background:var(--rule);padding:1px 5px}
+
+/* ---------- console ---------- */
+.console{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.panel{background:var(--card);border:2px solid var(--line);box-shadow:6px 6px 0 var(--shadow);padding:20px}
+.panel h3{font-size:18px;margin:0 0 4px}
+.panel .hint{font-size:11px;color:var(--muted);margin:0 0 16px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1}
+.row>button{flex:0 0 auto}
+.pill{display:inline-flex;align-items:center;gap:7px;border:2px solid var(--line);padding:5px 10px;font-size:10px;letter-spacing:.14em;text-transform:uppercase}
+.dot{width:8px;height:8px;background:var(--muted);border-radius:50%}
+.dot.ok{background:#2f9e44}.dot.bad{background:#c92a2a}
+.out{margin-top:14px;border-top:1px dashed var(--rule);padding-top:12px;font-size:12px;word-break:break-all}
+.out b{font-family:Georgia,serif;font-weight:400}
+.tag{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:14px}
+th{text-align:left;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line);padding:7px 8px 7px 0}
+td{border-bottom:1px solid var(--rule);padding:9px 8px 9px 0;vertical-align:top}
+td.num{font-variant-numeric:tabular-nums}
+.trunc{display:inline-block;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+
+#log{height:290px;overflow:auto;background:var(--bg);border:1px solid var(--rule);padding:12px;font-size:11.5px}
+#log div{padding:5px 0;border-bottom:1px dashed var(--rule)}
+#log .s2{color:#2f9e44}#log .s4,#log .s5{color:#c92a2a}
+#log .m{color:var(--muted)}
+
+.api-table td code{font-size:11.5px}
+footer{border-top:2px solid var(--line);padding:22px 0 60px;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+@media(max-width:900px){
+  .cell{grid-column:span 6}
+  .console{grid-template-columns:1fr}
+}
+@media(max-width:620px){.cell{grid-column:span 12}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="masthead">
+      <div>
+        <div class="eyebrow">FastAPI · Redis · PostgreSQL · Alembic</div>
+        <h1>The&nbsp;Shortener<br>Platform</h1>
+        <p class="sub">A multi-tenant URL shortener &amp; developer API — dual-tier auth, sliding-window rate limits, and an async Redis analytics pipeline. Everything below runs against the live server.</p>
+      </div>
+      <div class="mast-right">
+        <span class="pill" id="health"><span class="dot" id="healthDot"></span><span id="healthTxt">checking</span></span>
+        <button id="themeBtn" title="Toggle theme">◐ Dark</button>
+      </div>
+    </div>
+    <div class="meta-bar">
+      <div>v2.0.0</div><div>Edition — Live Demo</div><div id="authState">Anonymous</div><div><a href="/docs">OpenAPI /docs →</a></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ======== ARCHITECTURE ======== -->
+<section>
+  <div class="sec-head"><span class="num">01</span><h2>Architecture at a glance</h2></div>
+  <div class="grid">
+    <div class="cell"><div class="k">I. AUTH</div><h3>Dual-tier identity</h3><p>Humans get HS256 <b>JWTs</b>; machines get <code>sk_live_…</code> keys. Only the SHA-256 hash of a key is ever persisted — the plaintext is shown exactly once.</p></div>
+    <div class="cell"><div class="k">II. HOT PATH</div><h3>Sub-ms redirects</h3><p>Redirect reads the destination from a Redis cache (2h TTL) and returns <code>307</code> without touching SQL. DB is only hit on a cache miss.</p></div>
+    <div class="cell"><div class="k">III. ANALYTICS</div><h3>Queue + worker</h3><p>Clicks are <code>RPUSH</code>-ed to a Redis list in &lt;0.2ms. A separate worker <code>BLPOP</code>s, writes to SQL, retries with backoff, then parks poison events in a DLQ.</p></div>
+    <div class="cell"><div class="k">IV. LIMITS</div><h3>Two sliding windows</h3><p>Redis <code>ZSET</code> windows: 30 req/min per IP on public redirects, plus a per-API-key quota read from the database row.</p></div>
+    <div class="cell"><div class="k">V. DATA</div><h3>Soft deletes &amp; RBAC</h3><p>Deletes set <code>deleted_at</code> so analytics survive; reads filter it out. Ownership is enforced on every mutation, with an <code>admin</code> bypass.</p></div>
+    <div class="cell"><div class="k">VI. OPS</div><h3>Probes &amp; redaction</h3><p><code>/health/live</code> answers instantly; <code>/health/ready</code> pings DB + Redis and 503s on outage. Middleware redacts secrets from logs and stamps <code>X-Process-Time-Ms</code>.</p></div>
+    <div class="cell"><div class="k">VII. CONTRACT</div><h3>Versioned &amp; uniform</h3><p><code>/v1</code> carries RFC 8594 <code>Sunset</code> headers; <code>/v2</code> ships the nested payload. Every failure — including 422s — returns <code>{"error":{"code","message"}}</code>.</p></div>
+    <div class="cell"><div class="k">VIII. SAFETY</div><h3>SSRF &amp; alias guards</h3><p>Blocks <code>localhost</code>, <code>127.0.0.1</code>, and <code>169.254.169.254</code>. Vanity aliases are regex-checked and cannot hijack reserved routes.</p></div>
+    <div class="cell"><div class="k">IX. LAYERS</div><h3>Routers → services → CRUD</h3><p>HTTP concerns, business logic, and queries live in separate modules, so the shorten flow is testable without a client.</p></div>
+  </div>
+</section>
+
+<!-- ======== LIVE CONSOLE ======== -->
+<section class="rule">
+  <div class="sec-head"><span class="num">02</span><h2>Live console</h2></div>
+  <div class="console">
+
+    <div class="panel">
+      <h3>1 · Identity</h3>
+      <p class="hint">Sign up (min 8 chars) or log in. The JWT is kept in memory only.</p>
+      <div class="field"><label>Username</label><input id="user" value="demo_user" autocomplete="off"></div>
+      <div class="field"><label>Password</label><input id="pass" type="password" value="Password123!"></div>
+      <div class="row">
+        <button class="solid" id="signupBtn">Sign up</button>
+        <button id="loginBtn">Log in</button>
+        <button id="meBtn">/auth/me</button>
+        <button id="googleBtn">Google SSO</button>
+      </div>
+      <div class="out" id="authOut"><span class="tag">no token</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>2 · Developer key</h3>
+      <p class="hint">Needs a JWT. The plaintext key is returned once, then only its hash exists server-side.</p>
+      <div class="row">
+        <div><label>Label</label><input id="keyLabel" value="interview-demo"></div>
+        <div><label>Quota / min</label><input id="keyLimit" type="number" value="10" min="1"></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="solid" id="keyBtn">Create key</button>
+        <button id="keyListBtn">List keys</button>
+      </div>
+      <div class="out" id="keyOut"><span class="tag">no key</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>3 · Shorten</h3>
+      <p class="hint">Sent with <code>X-API-Key</code>. Try an alias, an expiry in the past (→ 410), or <code>http://127.0.0.1</code> (→ 422).</p>
+      <div class="field"><label>Destination URL</label><input id="longUrl" value="https://www.python.org/dev/peps/pep-0020/"></div>
+      <div class="row">
+        <div><label>Custom alias (optional)</label><input id="alias" placeholder="my-brand-link"></div>
+        <div><label>Expires at (optional)</label><input id="expires" type="datetime-local"></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="solid" id="shortenBtn">POST /shorten</button>
+        <button id="v1Btn">/v1</button>
+        <button id="v2Btn">/v2</button>
+      </div>
+      <div class="out" id="shortOut"><span class="tag">nothing yet</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>4 · Request log</h3>
+      <p class="hint">Every call, with the server's own <code>X-Process-Time-Ms</code> header.</p>
+      <div id="log"><div class="m">waiting for traffic…</div></div>
+      <div class="row" style="margin-top:12px"><button id="clearLog" class="sm">Clear</button></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ======== LINKS ======== -->
+<section class="rule">
+  <div class="sec-head"><span class="num">03</span><h2>My links</h2></div>
+  <div class="panel">
+    <div class="row">
+      <div><label>Sort by</label><select id="sortBy"><option value="created_at">created_at</option><option value="clicks">clicks</option></select></div>
+      <div><label>Order</label><select id="order"><option value="desc">desc</option><option value="asc">asc</option></select></div>
+      <div><label>Min clicks</label><input id="minClicks" type="number" min="0" placeholder="any"></div>
+      <div><label>Per page</label><input id="limit" type="number" value="10" min="1" max="100"></div>
+      <button class="solid" id="loadBtn" style="align-self:flex-end">GET /urls</button>
+    </div>
+    <table>
+      <thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Expires</th><th style="width:170px">Actions</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="m" style="color:var(--muted)">Log in and load your links.</td></tr></tbody>
+    </table>
+    <div class="row" style="margin-top:14px">
+      <span class="tag" id="pageInfo">—</span>
+      <button class="sm" id="prevBtn">← Prev</button>
+      <button class="sm" id="nextBtn">Next →</button>
+    </div>
+  </div>
+</section>
+
+<!-- ======== API REFERENCE ======== -->
+<section class="rule">
+  <div class="sec-head"><span class="num">04</span><h2>Endpoint reference</h2></div>
+  <table class="api-table">
+    <thead><tr><th style="width:90px">Method</th><th style="width:230px">Path</th><th style="width:130px">Auth</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/health/live</code></td><td>—</td><td>Liveness; no dependencies touched</td></tr>
+      <tr><td>GET</td><td><code>/health/ready</code></td><td>—</td><td>DB <code>SELECT 1</code> + Redis <code>PING</code>; 503 when either is down</td></tr>
+      <tr><td>POST</td><td><code>/auth/signup</code></td><td>—</td><td>Password length policy, 422 on violation</td></tr>
+      <tr><td>POST</td><td><code>/auth/login</code></td><td>—</td><td>Issues HS256 JWT</td></tr>
+      <tr><td>GET</td><td><code>/auth/google/login</code></td><td>—</td><td>OAuth2 start with single-use CSRF state</td></tr>
+      <tr><td>POST</td><td><code>/auth/keys</code></td><td>JWT</td><td>Returns plaintext key once; stores SHA-256</td></tr>
+      <tr><td>POST</td><td><code>/v1/shorten</code></td><td>API key</td><td>Legacy shape + <code>Sunset</code> header</td></tr>
+      <tr><td>POST</td><td><code>/v2/shorten</code></td><td>API key</td><td>Payload nested under <code>data</code></td></tr>
+      <tr><td>GET</td><td><code>/urls</code></td><td>JWT</td><td>Paginated, filtered, sorted; scoped by owner</td></tr>
+      <tr><td>PATCH</td><td><code>/urls/{code}</code></td><td>JWT</td><td>Retarget link; 403 for non-owners</td></tr>
+      <tr><td>DELETE</td><td><code>/urls/{code}</code></td><td>JWT</td><td>Soft delete; row and analytics survive</td></tr>
+      <tr><td>GET</td><td><code>/{code}</code></td><td>IP limit</td><td>307 from cache · 404 missing · 410 expired</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  <span>Built with FastAPI · SQLAlchemy · Redis · Alembic · pytest</span>
+  <span><a href="/docs">Swagger</a> · <a href="/redoc">ReDoc</a> · <a href="/health/ready">Readiness</a></span>
+</footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { token: null, key: null, skip: 0, total: 0 };
+
+/* ---------- theme ---------- */
+const setTheme = t => {
+  document.documentElement.dataset.theme = t;
+  $('themeBtn').textContent = t === 'dark' ? '◑ Light' : '◐ Dark';
+  localStorage.setItem('theme', t);
+};
+setTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+$('themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+
+/* ---------- http + log ---------- */
+function log(method, path, status, ms, note) {
+  const el = document.createElement('div');
+  el.innerHTML = `<span class="s${String(status)[0]}">${status}</span> <b>${method}</b> ${path}` +
+                 `<span class="m"> · ${ms ?? '?'}ms${note ? ' · ' + note : ''}</span>`;
+  const box = $('log');
+  if (box.firstChild && box.firstChild.classList.contains('m')) box.innerHTML = '';
+  box.prepend(el);
+}
+async function api(method, path, body, auth) {
+  const headers = {};
+  if (body) headers['Content-Type'] = 'application/json';
+  if (auth === 'jwt' && state.token) headers['Authorization'] = 'Bearer ' + state.token;
+  if (auth === 'key' && state.key) headers['X-API-Key'] = state.key;
+  let res, data;
+  try {
+    res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined, redirect: 'manual' });
+  } catch (e) {
+    log(method, path, 'ERR', null, e.message);
+    return { ok: false, status: 0, data: { error: { message: e.message } } };
+  }
+  try { data = await res.json(); } catch { data = null; }
+  log(method, path, res.status, res.headers.get('X-Process-Time-Ms'));
+  return { ok: res.ok, status: res.status, data };
+}
+const errText = d => {
+  const m = d && d.error ? d.error.message : d && d.detail;
+  return typeof m === 'string' ? m : JSON.stringify(m ?? d);
+};
+const esc = s => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+/* ---------- health ---------- */
+async function ping() {
+  try {
+    const res = await fetch('/health/ready');
+    const ok = res.ok;
+    $('healthDot').className = 'dot ' + (ok ? 'ok' : 'bad');
+    $('healthTxt').textContent = ok ? 'all systems ready' : 'dependency down';
+  } catch {
+    $('healthDot').className = 'dot bad';
+    $('healthTxt').textContent = 'offline';
+  }
+}
+ping(); setInterval(ping, 15000);
+
+/* ---------- 1 · identity ---------- */
+function setToken(tok, who) {
+  state.token = tok;
+  $('authState').textContent = who ? 'Signed in — ' + who : 'Anonymous';
+  $('authOut').innerHTML = `<span class="tag">jwt</span><br>${esc(tok.slice(0, 48))}…`;
+}
+$('signupBtn').onclick = async () => {
+  const r = await api('POST', '/auth/signup', { username: $('user').value, password: $('pass').value });
+  $('authOut').innerHTML = r.ok
+    ? `<span class="tag">created</span><br>user #${r.data.id} — now log in`
+    : `<span class="tag">${r.status}</span><br>${esc(errText(r.data))}`;
+};
+$('loginBtn').onclick = async () => {
+  const r = await api('POST', '/auth/login', { username: $('user').value, password: $('pass').value });
+  if (r.ok) { setToken(r.data.access_token, $('user').value); loadLinks(); }
+  else $('authOut').innerHTML = `<span class="tag">${r.status}</span><br>${esc(errText(r.data))}`;
+};
+$('meBtn').onclick = async () => {
+  const r = await api('GET', '/auth/me', null, 'jwt');
+  $('authOut').innerHTML = `<span class="tag">${r.status}</span><br><pre style="margin:6px 0;white-space:pre-wrap">${esc(JSON.stringify(r.data, null, 1))}</pre>`;
+};
+$('googleBtn').onclick = async () => {
+  const r = await api('GET', '/auth/google/login');
+  if (r.ok) location.href = r.data.authorization_url;
+};
+
+/* adopt token handed back by the OAuth callback redirect */
+const urlTok = new URLSearchParams(location.search).get('token');
+if (urlTok) { setToken(urlTok, 'google'); history.replaceState({}, '', location.pathname); }
+
+/* ---------- 2 · api keys ---------- */
+$('keyBtn').onclick = async () => {
+  const r = await api('POST', '/auth/keys',
+    { label: $('keyLabel').value, rate_limit: Number($('keyLimit').value) }, 'jwt');
+  if (r.ok) {
+    state.key = r.data.plain_key;
+    $('keyOut').innerHTML = `<span class="tag">shown once · quota ${r.data.rate_limit}/min</span><br><b>${esc(state.key)}</b>`;
+  } else $('keyOut').innerHTML = `<span class="tag">${r.status}</span><br>${esc(errText(r.data))}`;
+};
+$('keyListBtn').onclick = async () => {
+  const r = await api('GET', '/auth/keys', null, 'jwt');
+  $('keyOut').innerHTML = r.ok
+    ? `<span class="tag">${r.data.length} key(s) — prefixes only</span><br>` +
+      r.data.map(k => `${esc(k.prefix)}… · ${esc(k.label ?? '')} · ${k.rate_limit}/min`).join('<br>')
+    : `<span class="tag">${r.status}</span><br>${esc(errText(r.data))}`;
+};
+
+/* ---------- 3 · shorten ---------- */
+async function shorten(prefix) {
+  if (!state.key) { $('shortOut').innerHTML = '<span class="tag">need an api key first</span>'; return; }
+  const body = { url: $('longUrl').value };
+  if ($('alias').value.trim()) body.custom_alias = $('alias').value.trim();
+  if ($('expires').value) body.expires_at = new Date($('expires').value).toISOString();
+  const r = await api('POST', prefix + '/shorten', body, 'key');
+  if (!r.ok) { $('shortOut').innerHTML = `<span class="tag">${r.status}</span><br>${esc(errText(r.data))}`; return; }
+  const d = r.data.data ?? r.data;                      // v2 nests under .data
+  $('shortOut').innerHTML =
+    `<span class="tag">${prefix || 'default'} · ${r.status}</span><br>` +
+    `<b><a href="/${esc(d.short_code)}" target="_blank">${esc(d.short_url)}</a></b> ` +
+    `<button class="sm" onclick="navigator.clipboard.writeText('${esc(d.short_url)}')">Copy</button>`;
+  loadLinks();
+}
+$('shortenBtn').onclick = () => shorten('');
+$('v1Btn').onclick = () => shorten('/v1');
+$('v2Btn').onclick = () => shorten('/v2');
+
+/* ---------- 4 · links ---------- */
+async function loadLinks() {
+  if (!state.token) return;
+  const p = new URLSearchParams({
+    skip: state.skip, limit: $('limit').value,
+    sort_by: $('sortBy').value, order: $('order').value
+  });
+  if ($('minClicks').value !== '') p.set('min_clicks', $('minClicks').value);
+  const r = await api('GET', '/urls?' + p, null, 'jwt');
+  const tb = $('rows');
+  if (!r.ok) { tb.innerHTML = `<tr><td colspan="5">${r.status} — ${esc(errText(r.data))}</td></tr>`; return; }
+  state.total = r.data.total_count;
+  $('pageInfo').textContent = `${state.skip + 1}–${state.skip + r.data.items.length} of ${state.total}`;
+  tb.innerHTML = r.data.items.length ? r.data.items.map(u => `
+    <tr>
+      <td><a href="/${esc(u.short_code)}" target="_blank"><b>${esc(u.short_code)}</b></a></td>
+      <td><span class="trunc" title="${esc(u.original_url)}">${esc(u.original_url)}</span></td>
+      <td class="num">${u.clicks}</td>
+      <td class="num">${u.expires_at ? esc(u.expires_at.slice(0, 16)) : '—'}</td>
+      <td>
+        <button class="sm" data-edit="${esc(u.short_code)}">Retarget</button>
+        <button class="sm" data-del="${esc(u.short_code)}">Delete</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5">No links yet.</td></tr>';
+}
+$('rows').onclick = async e => {
+  const del = e.target.dataset.del, edit = e.target.dataset.edit;
+  if (del && confirm(`Soft-delete /${del}? The row stays for analytics.`)) {
+    await api('DELETE', '/urls/' + del, null, 'jwt'); loadLinks();
+  }
+  if (edit) {
+    const dest = prompt('New destination URL for /' + edit);
+    if (dest) { await api('PATCH', '/urls/' + edit, { new_original_url: dest }, 'jwt'); loadLinks(); }
+  }
+};
+$('loadBtn').onclick = () => { state.skip = 0; loadLinks(); };
+$('prevBtn').onclick = () => { state.skip = Math.max(0, state.skip - Number($('limit').value)); loadLinks(); };
+$('nextBtn').onclick = () => {
+  const next = state.skip + Number($('limit').value);
+  if (next < state.total) { state.skip = next; loadLinks(); }
+};
+$('clearLog').onclick = () => $('log').innerHTML = '<div class="m">cleared</div>';
+</script>
+</body>
+</html>
