@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.models import UserModel
 from app.config import settings
-from app.cache import get_cached_url, set_cached_url, increment_click_buffer
+from app.cache import get_cached_url, set_cached_url
 from app.schemas import URLShortenRequest, URLShortenResponse, URLShortenV2Response, URLShortenV2Data
 
 BASE62_CHARACTERS = string.ascii_letters + string.digits
@@ -47,7 +47,7 @@ def create_shortened_url_service(db: Session, payload: URLShortenRequest, owner:
         owner_id=owner.id,
         expires_at=payload.expires_at
     )
-    set_cached_url(short_code, original_url_str)
+    set_cached_url(short_code, original_url_str, db_url.expires_at)
 
     full_short_url = f"{settings.base_url}/{short_code}"
     created_iso = db_url.created_at.isoformat()
@@ -99,7 +99,7 @@ def handle_url_redirect_service(db: Session, short_code: str) -> RedirectRespons
                 detail="This short link has expired."
             )
 
-    set_cached_url(short_code, db_url.original_url)
+    set_cached_url(short_code, db_url.original_url, db_url.expires_at)
     from app.queue import push_click_event
     push_click_event(short_code)  # Non-blocking async queue push (< 0.2ms)
     return RedirectResponse(url=db_url.original_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)

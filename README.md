@@ -2,7 +2,7 @@
 
 A high-throughput, multi-tenant, production-grade **SaaS URL Shortener & Developer API Platform** built with **FastAPI**, **PostgreSQL / SQLite**, **Redis**, and **Alembic**.
 
-Designed from first principles for high availability, sub-millisecond hot-path redirects, high-throughput Redis click analytics, and enterprise-grade security.
+Designed from first principles for high availability, a cache-backed redirect hot path, off-request-path click analytics, and enterprise-grade security. Performance claims below are [measured](#-measured-performance), not estimated.
 
 ---
 
@@ -20,12 +20,15 @@ graph TD
         Services --> CRUD["CRUD & Database Layer (crud.py)"]
     end
 
-    subgraph "High-Throughput Hot Path (< 1.5ms)"
-        Services -->|"1. Cache Read"| Redis["Redis Caching & Sliding Window Rate Limiter"]
-        Services -->|"2. Atomic Memory INCR"| Buffer["Redis Click Counter Buffer (clicks_buffer)"]
+    subgraph "Redirect Hot Path"
+        Services -->|"1. Sliding window (1 round-trip)"| Redis["Redis Cache & Rate Limiter"]
+        Services -->|"2. Cache read"| Redis
+        Services -->|"3. RPUSH click event"| Queue["Redis List (click_events_queue)"]
     end
-    
-    Services -->|"3. DB Persistence / Cache Miss"| DB[("PostgreSQL / SQLite Database")]
+
+    Queue -->|"BLPOP"| Worker["Analytics Worker (retry + DLQ)"]
+    Worker -->|"UPDATE clicks"| DB[("PostgreSQL / SQLite Database")]
+    Services -->|"Cache miss / writes"| DB
 ```
 
 ---
@@ -40,6 +43,7 @@ graph TD
 * **Human Dashboard Auth:** OAuth2 Password Bearer with signed **HS256 JWT Access Tokens**.
 * **Developer API Key Engine:** Programmatic keys (`sk_live_...`) with **SHA-256 Cryptographic Hashing**. Only SHA-256 hashes are persisted in the database.
 * **OWASP Security Rules:** Password strength validation (min 8 chars, max 64 chars).
+* **Replay-Proof OAuth CSRF State:** State tokens live in Redis with a 15-minute TTL and are consumed with an atomic `DELETE`, so a state is valid exactly once and validation survives a restart or a second worker. Unknown states are rejected — validity is never inferred from the shape of the string.
 * **SSRF & Self-Loop Protection:** Prevents infinite redirection loops and blocks internal network IPs (`127.0.0.1`, `localhost`, `169.254.169.254`).
 
 ### 3. Custom Vanity Aliases & Link Expiration (HTTP 410 Gone)
@@ -47,13 +51,16 @@ graph TD
 * **Reserved Route Protection:** Denylist (`RESERVED_ALIASES`) protects system paths (`dashboard`, `docs`, `health`, `v1`, `v2`, `auth`, `openapi.json`, `static`) from route hijacking.
 * **Link Expiration Enforcement:** Supports `expires_at` UTC timestamps. Accessing expired links returns **HTTP 410 Gone**.
 
-### 4. High-Performance Hot Path & Redis Atomic Click Buffer
-* **Sub-Millisecond Redirects:** Redirect endpoints read directly from Redis cache with a 2-hour TTL.
-* **Atomic Redis Memory Increment:** Increments click counters in Redis memory (`clicks_buffer:short_code`) in **0.1ms**, bypassing synchronous SQL disk locks under heavy viral traffic.
+### 4. Cache-Backed Hot Path & Off-Path Click Analytics
+* **Cached Redirects:** The redirect reads the destination from Redis (TTL capped at 2 hours, or at the link's `expires_at` if sooner) and answers without touching SQL.
+* **Graceful Degradation (verified with Redis stopped):** The cache read returns `None`, the rate limiter fails open, and the request falls through to the database. Redis is an accelerator here, not a single point of failure. Bounded client timeouts and disabled retries are what make this real — with library defaults the "fallback" never runs, because the client blocks instead of raising.
+* **Clicks Leave the Request Path:** Each redirect `RPUSH`es a click event onto a Redis list; a separate worker `BLPOP`s it, writes to SQL, retries with exponential backoff, and parks poison events in a dead-letter queue. No SQL write happens while the user waits.
 
 ### 5. Two-Tier Sliding Window Rate Limiting
-* **Tier 1 (Per-IP):** Protects public redirect routes using Redis Sorted Sets (`ZSET`) sliding windows (30 req/min).
+* **Tier 1 (Per-IP):** Protects public redirect routes using Redis Sorted Set (`ZSET`) sliding windows, defaulting to 30 req/min and tunable per environment via `IP_RATE_LIMIT`.
 * **Tier 2 (Per-API-Key Quota):** Dynamically enforces customized rate limit quotas assigned to developer API keys in the database.
+* **One Round-Trip Per Check:** Prune, record, count, and TTL-refresh ship as a single `MULTI` — measured as the largest single cost on the redirect path before batching.
+* **Fails Open, Loudly:** If Redis is unreachable the limiter allows the request and logs a warning, rather than turning a cache outage into a redirect outage.
 
 ### 6. Enterprise CRUD, Soft Deletes & Pagination
 * **Paginated & Sorted Dashboard (`GET /urls`):** Filter by `owner_id`, `min_clicks`, `skip`, `limit`, and sort by `created_at` or `clicks`.
@@ -87,6 +94,59 @@ graph TD
 | `PATCH`| `/urls/{short_code}` | JWT | Update destination URL with strict ownership check |
 | `DELETE`| `/urls/{short_code}`| JWT | Soft-delete URL resource |
 | `GET` | `/{short_code}` | Per-IP Limit | Fast Redis Cache redirect + Atomic Click Counter Buffer |
+
+---
+
+## 📊 Measured Performance
+
+Numbers below come from `scripts/bench.py` (httpx only, no extra dependencies) on a
+**Windows 11 / AMD64 / 8-core box, Python 3.14, single Uvicorn worker, SQLite + local
+Redis**. This is a laptop, not a load-test rig — treat the ratios as the signal and the
+absolute values as a ceiling imposed by one process on one machine.
+
+| Scenario | Throughput | Server p50 | Server p99 |
+| :--- | ---: | ---: | ---: |
+| Redirect, cache hit, `c=1` | 94 req/s | **5.8 ms** | 11.1 ms |
+| Redirect, cache hit, `c=50` | 222 req/s | 40.0 ms | 121.6 ms |
+| Redirect, cache miss (DB fallback), serial | — | ~12 ms client-side | — |
+
+`Server` is the application's own `X-Process-Time-Ms` header, so it excludes the
+single-process load generator's queueing — client-observed latency at `c=50` is ~4x
+higher and is a property of the benchmark client, not the server.
+
+**What profiling changed.** The redirect originally issued **six sequential Redis
+round-trips** (four for the sliding window, one cache read, one queue push). Batching
+the rate-limiter's four commands into a single `MULTI` cut that to three:
+
+| | Before | After |
+| :--- | ---: | ---: |
+| Server p50 @ `c=1` | 10.6 ms | **5.8 ms** |
+| Throughput @ `c=50` | 127 req/s | **222 req/s** |
+
+The remaining cost is dominated by per-request round-trips and the sync-endpoint
+threadpool; the next wins would be async Redis and multiple workers.
+
+**Behaviour with Redis stopped** (server started against a dead Redis port):
+
+| Endpoint | Result |
+| :--- | :--- |
+| `GET /health/live` | `200` in 0.2s — liveness never touches dependencies |
+| `GET /health/ready` | `503` in 0.7s — instance leaves the load-balancer rotation |
+| `GET /{code}` | **`307` in 2.3s** — degraded, but still redirecting from SQL |
+| `GET /{unknown}` | `404` — correct status, not a cache-induced error |
+
+The 2.3s is four failed Redis attempts at a 0.25s timeout each. Serving slowly beats
+not serving, and readiness pulls the instance out of rotation meanwhile — but the honest
+next step is a circuit breaker that skips Redis entirely after N consecutive failures,
+which would take this back to normal latency. That is not implemented.
+
+Reproduce it:
+```powershell
+# raise the per-IP quota, or the benchmark measures 429s instead of redirects
+$env:IP_RATE_LIMIT=1000000
+venv\Scripts\python -m uvicorn app.main:app --port 8013
+venv\Scripts\python scripts\bench.py --base-url http://localhost:8013
+```
 
 ---
 
@@ -131,5 +191,18 @@ venv\Scripts\python -m pytest -v
 
 Output:
 ```text
-============================= 10 passed in 6.73s =============================
+============================= 43 passed in 19.20s =============================
 ```
+
+| Suite | Covers |
+| :--- | :--- |
+| `test_saas_platform.py` | Signup/login, API-key lifecycle, SSRF, ownership, OAuth, versioning, aliases |
+| `test_security_boundaries.py` | Key hashing at rest, forged/expired credentials, log redaction, error envelope |
+| `test_rate_limiting.py` | Per-IP and per-key sliding windows, quota isolation, window pruning |
+| `test_redirect_hot_path.py` | Cache hit/miss, TTL clamped to expiry, soft-delete eviction, 404/410/307 |
+| `test_dashboard_queries.py` | Pagination, sorting, filtering, owner scoping, admin bypass, retargeting |
+| `test_analytics_worker.py` | Click persistence, bounded retries with backoff, dead-letter queue |
+
+Redis and Postgres are stubbed in `tests/conftest.py`, so the suite runs with no
+infrastructure. Note that stubbing the cache to always miss is what originally hid two
+hot-path bugs (see the cache-lifecycle tests in `test_redirect_hot_path.py`).

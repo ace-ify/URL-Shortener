@@ -1,42 +1,9 @@
-import pytest
 from unittest.mock import patch
-from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from app.database import Base, get_db
 from app.main import app
 
-# Test database setup (In-Memory SQLite)
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Override get_db dependency to use Test DB
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
-
-@pytest.fixture(autouse=True)
-def setup_db_and_redis():
-    Base.metadata.create_all(bind=engine)
-    with patch("app.rate_limiter.r.zremrangebyscore", return_value=0), \
-         patch("app.rate_limiter.r.zcard", return_value=1), \
-         patch("app.rate_limiter.r.zadd", return_value=1), \
-         patch("app.rate_limiter.r.expire", return_value=True), \
-         patch("app.cache.r.get", return_value=None), \
-         patch("app.cache.r.set", return_value=True), \
-         patch("app.cache.r.ping", return_value=True), \
-         patch("app.queue.r.rpush", return_value=1):
-        yield
-    Base.metadata.drop_all(bind=engine)
-
+# DB + Redis rig lives in tests/conftest.py (autouse fixture).
 client = TestClient(app)
 
 # 1. AUTHENTICATION TESTS

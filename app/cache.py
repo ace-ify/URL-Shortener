@@ -1,36 +1,72 @@
+from datetime import datetime, timezone
+from typing import Optional
+
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
+
 from app.config import settings
 
+# Bounded timeouts are what make the fallbacks below actually graceful. Without them a
+# dead Redis does not raise — it blocks the worker thread on connect, so "fall back to
+# the DB" never runs and an optional dependency still takes the redirect path down.
+# Measured: an unreachable Redis hung requests indefinitely before these were set.
 r = redis.Redis(
     host=settings.redis_host,
     port=settings.redis_port,
     db=settings.redis_db,
-    decode_responses=True
+    decode_responses=True,
+    socket_connect_timeout=settings.redis_timeout_seconds,
+    socket_timeout=settings.redis_timeout_seconds,
+    # redis-py 6+ retries connection errors with exponential backoff by default, which
+    # turned a 0.25s timeout into an ~8.7s stall per call. The hot path wants to know
+    # immediately that the cache is gone, not to keep trying on the user's clock.
+    retry=Retry(NoBackoff(), 0),
 )
 
-def get_cached_url(short_code: str) -> str:
-    return r.get(short_code)
+MAX_TTL_SECONDS = 7200  # 2 hours
 
-def set_cached_url(short_code: str, original_url: str):
-    """Caches original URL mapping in Redis with a 2-hour TTL"""
+def get_cached_url(short_code: str) -> Optional[str]:
+    """
+    Reads the destination from the hot path.
+
+    Returns None on a Redis outage instead of raising, so the redirect degrades to a
+    slower database lookup rather than 500ing. Redis is an accelerator here, not the
+    source of truth, and must not be a single point of failure for redirects.
+    """
     try:
-        r.set(short_code, original_url, ex=7200)  # Modern syntax replacing deprecated setex
+        return r.get(short_code)
+    except Exception as e:
+        print(f"[Redis Cache Warning] Lookup failed for {short_code}, falling back to DB: {e}")
+        return None
+
+def set_cached_url(short_code: str, original_url: str, expires_at: Optional[datetime] = None):
+    """
+    Caches the destination for 2 hours, or until the link expires — whichever comes first.
+
+    The redirect hot path answers from this cache without reading SQL, so the TTL is the
+    only thing that can enforce expiry there. Letting Redis evict the key at the deadline
+    drops the request onto the DB path, which returns the correct HTTP 410.
+    """
+    ttl = MAX_TTL_SECONDS
+    if expires_at:
+        exp_utc = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
+        ttl = min(ttl, int((exp_utc - datetime.now(timezone.utc)).total_seconds()))
+        if ttl <= 0:
+            delete_cached_url(short_code)  # already dead: must never be served from cache
+            return
+    try:
+        r.set(short_code, original_url, ex=ttl)  # Modern syntax replacing deprecated setex
     except Exception as e:
         print(f"[Redis Cache Warning] Could not set cache for {short_code}: {e}")
 
-def increment_click_buffer(short_code: str) -> int:
-    """Atomically increments the click counter in Redis memory in 0.1ms (High-throughput buffer)."""
+def delete_cached_url(short_code: str):
+    """Evicts a link from the hot path (soft delete), so it stops redirecting immediately."""
     try:
-        return r.incr(f"clicks_buffer:{short_code}")
+        r.delete(short_code)
     except Exception as e:
-        print(f"[Redis Click Buffer Warning] Could not increment buffer for {short_code}: {e}")
-        return 1
+        print(f"[Redis Cache Warning] Could not evict cache for {short_code}: {e}")
 
-def get_buffered_clicks(short_code: str) -> int:
-    """Retrieves accumulated click counts from Redis buffer."""
-    try:
-        val = r.get(f"clicks_buffer:{short_code}")
-        return int(val) if val else 0
-    except Exception:
-        return 0
+# The clicks_buffer INCR helpers that used to live here were superseded by the
+# queue + worker pipeline (see ADR-007) and removed rather than left as dead code.
 

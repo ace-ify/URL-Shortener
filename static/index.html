@@ -11,7 +11,8 @@
 }
 [data-theme="dark"]{
   --bg:#0c0c0c; --fg:#efeeec; --card:#161616; --line:#efeeec;
-  --muted:#8d8d8d; --rule:#2a2a2a; --shadow:#000000;
+  /* shadow must sit above the bg, not match it, or the 3d offset disappears */
+  --muted:#8d8d8d; --rule:#2a2a2a; --shadow:#3f3f3f;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -292,6 +293,8 @@ async function api(method, path, body, auth) {
 }
 const errText = d => {
   const m = d && d.error ? d.error.message : d && d.detail;
+  if (Array.isArray(m))  // pydantic 422 payload: one entry per offending field
+    return m.map(e => `${(e.loc || []).slice(-1)[0]}: ${e.msg}`).join(' · ');
   return typeof m === 'string' ? m : JSON.stringify(m ?? d);
 };
 const esc = s => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));

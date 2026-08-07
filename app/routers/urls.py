@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from app.config import settings
 from app.models import UserModel
 from app.auth import get_current_user
 from app.rate_limiter import limit_ip_rate, limit_api_key_rate
-from app.cache import set_cached_url
+from app.cache import set_cached_url, delete_cached_url
 from app.schemas import (
     URLShortenRequest, URLShortenResponse, URLShortenV2Response, 
     URLUpdateDestinationRequest, URLPaginatedResponse
@@ -57,8 +57,10 @@ def list_urls(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
     min_clicks: Optional[int] = Query(None, ge=0),
-    sort_by: str = Query("created_at", enum=["created_at", "clicks"]),
-    order: str = Query("desc", enum=["asc", "desc"]),
+    # Literal (not Query(enum=...)) — only Literal is actually validated by FastAPI.
+    # Without it any string reaches getattr(URLModel, sort_by) and 500s on e.g. ?sort_by=metadata.
+    sort_by: Literal["created_at", "clicks"] = Query("created_at"),
+    order: Literal["asc", "desc"] = Query("desc"),
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -98,7 +100,7 @@ def update_url(
     if not updated_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="URL not found")
         
-    set_cached_url(short_code, new_url_str)
+    set_cached_url(short_code, new_url_str, updated_url.expires_at)
     return URLShortenResponse(
         short_code=updated_url.short_code,
         short_url=f"{settings.base_url}/{updated_url.short_code}",
@@ -122,6 +124,8 @@ def delete_url(
 
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="URL not found or already deleted")
+
+    delete_cached_url(short_code)  # otherwise the hot path keeps redirecting for up to 2h
     return {"message": f"URL {short_code} soft-deleted successfully"}
 
 

@@ -90,7 +90,8 @@ As an API evolves, changing response schemas or renaming JSON keys breaks existi
 ## ADR-004: Third-Party OAuth 2.0 Integration & Account Linking Policy
 
 ### Status
-Accepted
+Accepted — **state handling revised by ADR-010** (the in-memory `OAUTH_STATE_STORE`
+described below was replaced by Redis-backed single-use keys).
 
 ### Context & Problem
 While self-contained auth (JWT + hashed passwords) works for standard credential logins, enterprise SaaS applications require federated identity verification (e.g. "Sign in with Google"). OAuth 2.0 authorization code flow introduces specific security risks:
@@ -115,7 +116,9 @@ While self-contained auth (JWT + hashed passwords) works for standard credential
 ## ADR-005: High-Throughput Redis Atomic Click Counter Buffer
 
 ### Status
-Accepted
+**Superseded by ADR-007.** The `clicks_buffer:*` INCR helpers were removed from
+`app/cache.py`; a counter with no defined flush owner loses data whenever Redis is
+evicted or restarted. The queue-and-worker pipeline replaces it.
 
 ### Context & Problem
 In high-scale URL shorteners receiving thousands of clicks per second on viral links, executing a synchronous SQL database update (`UPDATE urls SET clicks = clicks + 1 WHERE short_code = 'xyz'`) on every single HTTP redirect creates severe database row locks, disk I/O bottlenecks, and degrades redirect response times from < 2ms to over 50ms.
@@ -148,3 +151,133 @@ Accepted
 
 
 
+
+---
+
+## ADR-007: Click Analytics via Redis Queue + Worker with Dead-Letter Queue
+
+### Status
+Accepted (supersedes ADR-005)
+
+### Context & Problem
+Counting a click is a write, and writes on the redirect path make the user wait for
+disk I/O and row locks. ADR-005 moved the counter into a Redis `INCR`, which removed
+the latency but created a durability hole: nothing owned flushing the buffer to SQL, so
+an eviction or restart silently discarded analytics. "Fast but occasionally wrong" is
+the worst outcome for billing-adjacent data.
+
+### Decision
+1. **Enqueue, don't count.** `GET /{short_code}` `RPUSH`es `{short_code, timestamp}` onto
+   `click_events_queue` and returns. The redirect never issues a SQL write.
+2. **A worker owns persistence.** `app/worker.py` `BLPOP`s events and applies them via
+   `crud.increment_clicks`, so the DB write happens off the request path.
+3. **Bounded retries, then a DLQ.** A failed write is requeued with an incremented
+   `retry_count` and exponential backoff; after `MAX_RETRIES` the event moves to
+   `click_events_dlq` instead of cycling forever. `handle_click_event()` returns the
+   outcome (`ok` / `retried` / `dlq` / `skipped`) so the policy is unit-testable without
+   running the blocking loop.
+
+### Rationale & Trade-offs
+Click counts become **eventually consistent** — a dashboard can lag the true count by
+the worker's drain time. That is an acceptable trade for a metric, and it is a trade we
+make explicitly rather than by accident. The queue is still Redis, so a Redis loss can
+drop in-flight events; durable delivery would need Streams with consumer groups, which
+is the natural next step if analytics ever become billable.
+
+---
+
+## ADR-008: Cache Entries Carry the Link's Lifecycle
+
+### Status
+Accepted
+
+### Context & Problem
+The redirect answers from Redis without reading SQL, so any rule enforced only in the
+database is invisible to the hot path. Two rules were: expiry (`HTTP 410`) and soft
+delete (`HTTP 404`). Both were checked on the cache-miss path only, so a cached link
+kept returning `307` after it expired or was deleted — for up to the full 2-hour TTL.
+Integration tests missed it because the test rig stubs the cache to always miss, so no
+test ever exercised the path that production uses for nearly every request.
+
+### Decision
+1. **TTL is clamped to the deadline:** `set_cached_url()` caches for
+   `min(2h, seconds_until_expires_at)`, and refuses to cache an already-expired link.
+   Redis evicts the key at the deadline, the next request falls to the DB path, and the
+   correct `410` is returned — with no extra read on the hot path.
+2. **Soft delete evicts:** `DELETE /urls/{code}` calls `delete_cached_url()`, so a
+   deleted link stops redirecting immediately rather than at TTL expiry.
+
+### Rationale & Trade-offs
+Encoding the lifecycle in the TTL keeps the hot path at one Redis read; the alternative
+(storing an expiry alongside the URL and comparing on every request) costs a JSON
+decode per redirect to solve a problem Redis already solves. Trade-off: expiry is
+enforced at second granularity by Redis eviction, not to the millisecond.
+
+---
+
+## ADR-009: Rate Limiter Fails Open, and Costs One Round-Trip
+
+### Status
+Accepted
+
+### Context & Problem
+Benchmarking the redirect path (`scripts/bench.py`) showed **six sequential Redis
+round-trips per redirect**, four of them from the sliding-window limiter, at a measured
+server-side p50 of 10.6 ms. Separately, every one of those calls was unguarded: an
+unreachable Redis raised, so a cache outage produced `500`s on the one route that must
+survive — even though the database could still answer.
+
+### Decision
+1. **One `MULTI` per check:** prune, record, count, and refresh TTL ship as a single
+   pipeline. Measured effect: server p50 10.6 ms → 5.8 ms, throughput at `c=50`
+   127 → 222 req/s.
+2. **Fail open on outage:** if the pipeline raises, the request is allowed and a warning
+   is logged. Availability of redirects outranks enforcement of a soft quota.
+3. **The quota is configuration:** `IP_RATE_LIMIT` moved into `Settings`, so load tests
+   and staging can raise it without a code change.
+
+4. **Bounded client timeouts, no retries.** Catching exceptions is not enough: with
+   redis-py's defaults an unreachable Redis does not raise promptly, it *blocks* —
+   measured at ~8.7s per call from backoff retries, and an indefinite hang across a
+   full redirect. The client now uses a 0.25s connect/read timeout
+   (`REDIS_TIMEOUT_SECONDS`) and `Retry(NoBackoff(), 0)`, which is what turns the
+   `except` branches below into an actual fallback. Verified against a dead Redis port:
+   redirects return `307` in ~2.3s instead of hanging.
+
+### Rationale & Trade-offs
+Failing open means a Redis outage temporarily removes abuse protection; the alternative,
+failing closed, converts a degraded cache into a total outage. The warning log is the
+alerting hook. The hit is recorded *before* it is counted, so a rejected request still
+consumes a slot and a flood earns no free retries — at the cost of counting requests we
+ultimately rejected.
+
+**Known ceiling:** while Redis is down every request still pays ~4 failed connection
+attempts (~2.3s). A circuit breaker that trips after N consecutive failures and skips
+Redis entirely would restore normal latency; it is deliberately not built yet, since
+the readiness probe already removes the instance from rotation during an outage.
+
+---
+
+## ADR-010: OAuth CSRF State Is Redis-Backed and Single-Use
+
+### Status
+Accepted (revises ADR-004)
+
+### Context & Problem
+State validation kept tokens in a module-level dict and ended with a fallback:
+`return len(state) >= 20`. Any sufficiently long attacker-supplied string therefore
+passed validation, which is equivalent to having no CSRF protection on the OAuth
+callback at all. The in-process dict was also incorrect under more than one worker and
+across restarts — which is precisely why the unsafe fallback had been added.
+
+### Decision
+State tokens are stored as `oauth_state:{token}` keys in Redis with a 15-minute TTL and
+consumed with `DELETE`, whose return value (number of keys removed) makes consumption
+atomic. Only the first caller of a given state sees `1`; replays and forgeries see `0`
+and are rejected. There is no shape-based fallback — unknown state fails closed.
+
+### Rationale & Trade-offs
+Correctness across workers now comes from shared state rather than from weakening the
+check. Redis becomes a hard dependency for *login* (unlike redirects, which degrade
+gracefully) — the right call, since failing open on a CSRF check is not a trade worth
+making.
